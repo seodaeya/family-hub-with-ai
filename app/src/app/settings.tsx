@@ -97,7 +97,7 @@ export default function SettingsScreen() {
         {notifOk === false ? (
           <Row style={{ justifyContent: 'space-between' }}>
             <Text style={styles.label}>일정 알림</Text>
-            <Text style={[styles.value, { color: colors.sub }]}>이 환경에서는 미지원</Text>
+            <Text style={[styles.value, { color: colors.sub }]}>이 빌드에서는 꺼짐</Text>
           </Row>
         ) : null}
         <Btn label={syncing ? '동기화 중…' : '지금 동기화'} variant="secondary" loading={syncing} onPress={() => syncNow()} />
