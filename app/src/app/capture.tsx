@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Image, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Image, Pressable, ScrollView, StyleSheet, Text, View, type ScrollViewInstance } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import * as Clipboard from 'expo-clipboard';
 import * as Sharing from 'expo-sharing';
@@ -42,6 +42,16 @@ export default function CaptureScreen() {
   const [photoSettings, setPhotoSettings] = useState<PhotoSettings | null>(null);
   const [aiSettings, setAiSettings] = useState<AiSettings>({ model: 'fast' });
   const timer = useRef<ReturnType<typeof setInterval> | null>(null);
+  const scrollRef = useRef<ScrollViewInstance>(null);
+
+  const scrollToFallback = () => {
+    setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 120);
+  };
+
+  const openFallback = () => {
+    setShowFallback(true);
+    scrollToFallback();
+  };
 
   useEffect(() => {
     getAiSettings().then(setAiSettings);
@@ -132,6 +142,7 @@ export default function CaptureScreen() {
           : '분석에 실패했습니다. 사진을 다시 찍거나 직접 입력해 주세요.';
       setError(message);
       setShowFallback(true);
+      scrollToFallback();
     } finally {
       clearTimeout(stageTimer);
       setBusy(false);
@@ -182,6 +193,7 @@ export default function CaptureScreen() {
           : '링크를 읽지 못했습니다. 공개 링크인지 확인하거나 글을 직접 붙여넣어 주세요.',
       );
       setShowFallback(true);
+      scrollToFallback();
     } finally {
       clearTimeout(stageTimer);
       setBusy(false);
@@ -202,7 +214,7 @@ export default function CaptureScreen() {
   const totalSend = photos.reduce((sum, photo) => sum + photo.bytes, 0);
 
   return (
-    <Screen>
+    <Screen scrollRef={scrollRef}>
       <View style={styles.header}>
         <View style={{ flex: 1 }}>
           <Text style={styles.title}>사진으로 추가</Text>
@@ -220,7 +232,7 @@ export default function CaptureScreen() {
           <Text style={styles.pickerIcon}>🖼</Text>
           <Text style={styles.pickerText}>앨범에서</Text>
         </Pressable>
-        <Pressable style={styles.picker} onPress={() => setShowFallback(true)} disabled={busy}>
+        <Pressable style={styles.picker} onPress={openFallback} disabled={busy}>
           <Text style={styles.pickerIcon}>⌨️</Text>
           <Text style={styles.pickerText}>글·링크</Text>
         </Pressable>
@@ -396,7 +408,7 @@ export default function CaptureScreen() {
           </View>
         </Card>
       ) : (
-        <Text style={styles.fallbackLink} onPress={() => setShowFallback(true)}>
+        <Text style={styles.fallbackLink} onPress={openFallback}>
           잘 안 읽히나요? 링크·직접 입력으로 정리하기
         </Text>
       )}

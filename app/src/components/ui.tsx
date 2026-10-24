@@ -1,4 +1,4 @@
-import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, TextInput, View, type StyleProp, type TextInputProps, type ViewStyle } from 'react-native';
+import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, TextInput, View, type ScrollViewInstance, type StyleProp, type TextInputProps, type ViewStyle } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { colors, font, radius, space } from '@/theme';
 
@@ -8,6 +8,7 @@ export function Screen({
   padded = true,
   style,
   footer,
+  scrollRef,
 }: {
   children?: React.ReactNode;
   scroll?: boolean;
@@ -15,6 +16,8 @@ export function Screen({
   style?: StyleProp<ViewStyle>;
   /** Rendered outside the scroll view — use for the floating tab bar. */
   footer?: React.ReactNode;
+  /** Lets a screen scroll to a section (e.g. after opening a panel). */
+  scrollRef?: React.RefObject<ScrollViewInstance | null>;
 }) {
   // Applied by hand instead of SafeAreaView so the extra breathing room below
   // the status bar is identical on every device (it used to look glued to the top).
@@ -37,6 +40,7 @@ export function Screen({
     <View style={styles.screen}>
       {scroll ? (
         <ScrollView
+          ref={scrollRef}
           contentContainerStyle={{ paddingBottom: 150 }}
           keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}
