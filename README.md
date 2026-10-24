@@ -233,6 +233,7 @@ tail -f data/hub.log
 | 증상 | 확인 |
 |---|---|
 | `EADDRINUSE 0.0.0.0:4317` | 이미 허브가 실행 중입니다. `lsof -ti tcp:4317` 로 확인 후 기존 프로세스를 쓰거나 종료하세요 |
+| iPhone Expo Go: `You need to be signed in to Expo Go and Expo CLI` | Expo Go iOS는 실제 기기에서 개발 서버를 열 때 **CLI와 기기가 같은 Expo 계정**으로 로그인되어 있어야 합니다. 맥에서 `npx expo login`, iPhone Expo Go 오른쪽 위 계정 아이콘에서 같은 계정으로 로그인 후 **Try again**. Android·iOS 시뮬레이터는 로그인 없이 동작합니다 |
 | 앱이 서버를 못 찾음 | 맥과 폰이 같은 Wi-Fi인지, `npm start` 중인지, 주소의 IP가 맞는지 |
 | `보호자 승인 대기` | 보호자 기기 → 기기 관리 → 승인 |
 | AI가 느림 | 정확 모드(14B)는 30초 이상 걸립니다. 빠른 모드로 전환 |
