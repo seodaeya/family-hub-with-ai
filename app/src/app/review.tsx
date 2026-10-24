@@ -1,7 +1,7 @@
 import { useState } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Alert, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useRouter } from 'expo-router';
-import { getPhotoSettings, saveEvent, saveItem, saveSource } from '@/lib/db';
+import { getPhotoSettings, listEvents, saveEvent, saveItem, saveSource } from '@/lib/db';
 import { rescheduleNotifications } from '@/lib/notify';
 import { savePhotoLocally } from '@/lib/photo';
 import { useSession } from '@/lib/session';
@@ -85,6 +85,11 @@ export default function ReviewScreen() {
     setItems((current) => current.map((item, i) => (i === index ? { ...item, ...patch } : item)));
 
   const save = async () => {
+    const missingDate = selectedEvents.find((event) => !event.date.trim());
+    if (missingDate) {
+      Alert.alert('날짜가 없습니다', `"${missingDate.title || '제목 없음'}" 일정의 날짜를 입력해 주세요.`);
+      return;
+    }
     setSaving(true);
     setError(null);
     try {
