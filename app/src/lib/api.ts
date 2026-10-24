@@ -98,10 +98,11 @@ export const api = {
   extract: (input: {
     images?: Array<{ base64: string; mimeType: string }>;
     text?: string;
+    url?: string;
     hint?: string;
     model?: string;
     retain?: boolean;
-  }) => request<ExtractResult>('/v1/extract', { body: input, timeoutMs: 240_000 }),
+  }) => request<ExtractResult>('/v1/extract', { body: input, timeoutMs: 300_000 }),
 };
 
 /** Health check against a URL that is not (yet) the saved server. */

@@ -86,6 +86,7 @@ export type ExtractResult = {
   confidence: number;
   ocrText: string;
   photoRef?: string | null;
+  source?: { url: string; title: string; via: string };
   meta: { ocrMs?: number; llmMs: number; model: string; totalMs: number };
 };
 

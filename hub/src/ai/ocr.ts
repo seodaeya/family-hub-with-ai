@@ -5,7 +5,16 @@ import { join } from 'node:path';
 import { config } from '../config.ts';
 
 export type OcrBlock = { text: string; confidence: number; x: number; y: number; w: number; h: number };
-export type OcrResult = { text: string; blocks: OcrBlock[]; ms: number; engine: string };
+export type OcrResult = {
+  text: string;
+  blocks: OcrBlock[];
+  ms: number;
+  engine: string;
+  /** Average per-line confidence (0–1). Below ~0.45 the photo was probably unreadable. */
+  meanConfidence: number;
+  /** True when a detected page was perspective-corrected before reading. */
+  deskewed: boolean;
+};
 
 const EXT_BY_MIME: Record<string, string> = {
   'image/jpeg': 'jpg',
@@ -22,19 +31,27 @@ export async function runOcr(image: Buffer, mimeType = 'image/jpeg'): Promise<Oc
 
   await writeFile(tmpPath, image);
   try {
-    const blocks = await execOcr(tmpPath);
+    const { blocks, meanConfidence, deskewed } = await execOcr(tmpPath);
     return {
       text: blocks.map((block) => block.text).join('\n'),
       blocks,
       ms: Date.now() - started,
       engine: 'apple-vision',
+      meanConfidence,
+      deskewed,
     };
   } finally {
     await unlink(tmpPath).catch(() => {});
   }
 }
 
-function execOcr(path: string): Promise<OcrBlock[]> {
+type OcrOutput = { blocks?: OcrBlock[]; meanConfidence?: number; deskewed?: boolean };
+
+function execOcr(path: string): Promise<{
+  blocks: OcrBlock[];
+  meanConfidence: number;
+  deskewed: boolean;
+}> {
   return new Promise((resolve, reject) => {
     const child = spawn(config.ocrBin, [path, 'ko-KR,en-US'], { stdio: ['ignore', 'pipe', 'pipe'] });
     let stdout = '';
@@ -54,8 +71,15 @@ function execOcr(path: string): Promise<OcrBlock[]> {
         return;
       }
       try {
-        const parsed = JSON.parse(stdout) as { blocks: OcrBlock[] };
-        resolve(parsed.blocks ?? []);
+        const parsed = JSON.parse(stdout) as OcrOutput;
+        const blocks = parsed.blocks ?? [];
+        const meanConfidence =
+          typeof parsed.meanConfidence === 'number'
+            ? parsed.meanConfidence
+            : blocks.length
+              ? blocks.reduce((sum, block) => sum + block.confidence, 0) / blocks.length
+              : 0;
+        resolve({ blocks, meanConfidence, deskewed: Boolean(parsed.deskewed) });
       } catch {
         reject(new Error('OCR 결과를 해석할 수 없습니다.'));
       }

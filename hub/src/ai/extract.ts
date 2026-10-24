@@ -28,10 +28,19 @@ export type ExtractResult = {
   warnings: string[];
   confidence: number;
   ocrText: string;
-  meta: { ocrMs?: number; llmMs: number; model: string; totalMs: number };
+  meta: {
+    ocrMs?: number;
+    ocrConfidence?: number;
+    deskewed?: boolean;
+    llmMs: number;
+    model: string;
+    totalMs: number;
+  };
 };
 
 const LIST_TYPES = new Set(['shopping', 'supply', 'todo']);
+/** Below this the photo was usually too small, blurry or tilted to read reliably. */
+const LOW_OCR_CONFIDENCE = 0.6;
 
 export async function extract(input: {
   image?: Buffer;
@@ -43,12 +52,23 @@ export async function extract(input: {
   const started = Date.now();
   let ocrText = (input.text ?? '').trim();
   let ocrMs: number | undefined;
+  let ocrConfidence: number | undefined;
+  let deskewed: boolean | undefined;
   const mode: 'image' | 'text' = input.image ? 'image' : 'text';
 
   if (input.image) {
     const ocr = await runOcr(input.image, input.mimeType);
     ocrMs = ocr.ms;
+    ocrConfidence = ocr.meanConfidence;
+    deskewed = ocr.deskewed;
     if (ocr.text.trim().length > ocrText.length) ocrText = ocr.text.trim();
+  }
+
+  const qualityWarnings: string[] = [];
+  if (ocrConfidence !== undefined && ocrConfidence < LOW_OCR_CONFIDENCE) {
+    qualityWarnings.push(
+      '사진 글자가 흐려서 인식이 어렵습니다. 밝은 곳에서 다시 찍거나, 제미나이 공유 링크를 붙여넣어 주세요.',
+    );
   }
 
   if (!ocrText) {
@@ -57,10 +77,10 @@ export async function extract(input: {
       mode,
       events: [],
       items: [],
-      warnings: ['글자를 찾지 못했습니다. 사진을 다시 찍거나 직접 입력해 주세요.'],
+      warnings: [...qualityWarnings, '글자를 찾지 못했습니다. 사진을 다시 찍거나 직접 입력해 주세요.'],
       confidence: 0,
       ocrText: '',
-      meta: { ocrMs, llmMs: 0, model: '', totalMs: Date.now() - started },
+      meta: { ocrMs, ocrConfidence, deskewed, llmMs: 0, model: '', totalMs: Date.now() - started },
     };
   }
 
@@ -77,16 +97,20 @@ export async function extract(input: {
       mode,
       events: [],
       items: [],
-      warnings: ['AI 응답을 해석하지 못했습니다. 직접 확인해 주세요.'],
+      warnings: [...qualityWarnings, 'AI 응답을 해석하지 못했습니다. 직접 확인해 주세요.'],
       confidence: 0,
       ocrText,
-      meta: { ocrMs, llmMs: llm.ms, model: llm.model, totalMs: Date.now() - started },
+      meta: { ocrMs, ocrConfidence, deskewed, llmMs: llm.ms, model: llm.model, totalMs: Date.now() - started },
     };
   }
 
   const events = normalizeEvents(parsed.events);
   const items = normalizeItems(parsed.items);
-  const warnings = [...normalizeWarnings(parsed.warnings), ...dateWarnings(events, items)];
+  const warnings = [
+    ...qualityWarnings,
+    ...normalizeWarnings(parsed.warnings),
+    ...dateWarnings(events, items),
+  ];
   const confidence = averageConfidence(events, items);
 
   return {
@@ -97,7 +121,7 @@ export async function extract(input: {
     warnings,
     confidence,
     ocrText,
-    meta: { ocrMs, llmMs: llm.ms, model: llm.model, totalMs: Date.now() - started },
+    meta: { ocrMs, ocrConfidence, deskewed, llmMs: llm.ms, model: llm.model, totalMs: Date.now() - started },
   };
 }
 

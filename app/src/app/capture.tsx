@@ -31,12 +31,14 @@ export default function CaptureScreen() {
   const [photos, setPhotos] = useState<PreparedImage[]>([]);
   const [hint, setHint] = useState('');
   const [busy, setBusy] = useState(false);
+  const [action, setAction] = useState<'photo' | 'paste' | 'url' | null>(null);
   const [stage, setStage] = useState<Stage>('idle');
   const [elapsed, setElapsed] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [showFallback, setShowFallback] = useState(false);
   const [pasted, setPasted] = useState('');
   const [textOnly, setTextOnly] = useState('');
+  const [url, setUrl] = useState('');
   const [photoSettings, setPhotoSettings] = useState<PhotoSettings | null>(null);
   const [aiSettings, setAiSettings] = useState<AiSettings>({ model: 'fast' });
   const timer = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -105,6 +107,7 @@ export default function CaptureScreen() {
 
   const analyze = async () => {
     setBusy(true);
+    setAction('photo');
     setElapsed(0);
     setError(null);
     setStage('reading');
@@ -132,6 +135,7 @@ export default function CaptureScreen() {
     } finally {
       clearTimeout(stageTimer);
       setBusy(false);
+      setAction(null);
       setStage('idle');
     }
   };
@@ -139,6 +143,7 @@ export default function CaptureScreen() {
   const analyzePasted = async () => {
     if (!pasted.trim()) return;
     setBusy(true);
+    setAction('paste');
     setElapsed(0);
     setError(null);
     setStage('thinking');
@@ -151,6 +156,36 @@ export default function CaptureScreen() {
       setError(err instanceof ApiError ? err.message : '붙여넣은 내용을 정리하지 못했습니다.');
     } finally {
       setBusy(false);
+      setAction(null);
+      setStage('idle');
+    }
+  };
+
+  const analyzeUrl = async () => {
+    const link = url.trim();
+    if (!link) return;
+    setBusy(true);
+    setAction('url');
+    setElapsed(0);
+    setError(null);
+    setStage('reading');
+    const stageTimer = setTimeout(() => setStage('thinking'), 5000);
+    try {
+      const model = aiSettings.model === 'accurate' ? health?.ollama.altModel ?? 'qwen2.5:14b-instruct' : undefined;
+      const result = await api.extract({ url: link, model, hint: hint.trim() || undefined });
+      setDraft({ result, images: [], text: result.source?.url ?? link });
+      router.push('/review');
+    } catch (err) {
+      setError(
+        err instanceof ApiError
+          ? err.message
+          : '링크를 읽지 못했습니다. 공개 링크인지 확인하거나 글을 직접 붙여넣어 주세요.',
+      );
+      setShowFallback(true);
+    } finally {
+      clearTimeout(stageTimer);
+      setBusy(false);
+      setAction(null);
       setStage('idle');
     }
   };
@@ -187,7 +222,7 @@ export default function CaptureScreen() {
         </Pressable>
         <Pressable style={styles.picker} onPress={() => setShowFallback(true)} disabled={busy}>
           <Text style={styles.pickerIcon}>⌨️</Text>
-          <Text style={styles.pickerText}>글 붙여넣기</Text>
+          <Text style={styles.pickerText}>글·링크</Text>
         </Pressable>
       </View>
 
@@ -265,10 +300,16 @@ export default function CaptureScreen() {
       ) : null}
 
       <Btn
-        label={busy ? (stage === 'reading' ? '사진 읽는 중…' : 'AI가 정리하는 중…') : 'AI에게 정리 맡기기'}
+        label={
+          busy && action === 'photo'
+            ? stage === 'reading'
+              ? '사진 읽는 중…'
+              : 'AI가 정리하는 중…'
+            : 'AI에게 정리 맡기기'
+        }
         onPress={analyze}
-        loading={busy}
-        disabled={!photos.length && !textOnly.trim()}
+        loading={busy && action === 'photo'}
+        disabled={(!photos.length && !textOnly.trim()) || busy}
       />
 
       {busy ? (
@@ -276,7 +317,11 @@ export default function CaptureScreen() {
           <ActivityIndicator color={colors.primary} />
           <View style={{ flex: 1 }}>
             <Text style={styles.progressTitle}>
-              {stage === 'reading' ? '글자를 읽고 있어요' : '일정과 준비물을 뽑고 있어요'}
+              {stage === 'reading'
+                ? action === 'url'
+                  ? '링크를 읽고 있어요'
+                  : '글자를 읽고 있어요'
+                : '일정과 준비물을 뽑고 있어요'}
             </Text>
             <Text style={styles.progressSub}>
               {elapsed}초 경과 · 보통 6~15초 걸립니다 (정확 모드는 30초 이상)
@@ -296,7 +341,31 @@ export default function CaptureScreen() {
           <Text style={styles.cardTitle}>잘 읽히지 않을 때</Text>
 
           <View style={{ gap: 6 }}>
-            <Text style={styles.step}>1. 프롬프트 복사 → 외부 AI 앱에서 사진과 함께 붙여넣기</Text>
+            <Text style={styles.step}>1. 제미나이 공유 링크 붙여넣기</Text>
+            <Text style={styles.linkSub}>
+              제미나이에서 이미 정리해 둔 글이 있으면 링크만 주세요. 맥이 링크를 읽어 일정과 준비물로 바꿉니다.
+            </Text>
+            <Field
+              value={url}
+              onChangeText={setUrl}
+              placeholder="https://share.gemini.google/..."
+              autoCapitalize="none"
+              autoCorrect={false}
+              keyboardType="url"
+              style={{ fontSize: 13 }}
+            />
+            <Btn
+              label="링크에서 정리하기"
+              small
+              onPress={analyzeUrl}
+              loading={busy && action === 'url'}
+              disabled={!url.trim() || busy}
+            />
+            <Hint>공개 링크만 읽을 수 있습니다. 로그인이 필요한 주소는 안 됩니다.</Hint>
+          </View>
+
+          <View style={{ gap: 6 }}>
+            <Text style={styles.step}>2. 외부 AI에 사진 보내기</Text>
             <View style={{ flexDirection: 'row', gap: 8 }}>
               <Btn label="프롬프트 복사" small variant="secondary" onPress={() => Clipboard.setStringAsync(EXTERNAL_PROMPT)} />
               <Btn
@@ -308,18 +377,14 @@ export default function CaptureScreen() {
               />
             </View>
             <Hint>외부로 보내는 순간 이 사진은 가족 허브 밖으로 나갑니다. 동의하는 경우에만 사용하세요.</Hint>
-          </View>
-
-          <View style={{ gap: 6 }}>
-            <Text style={styles.step}>2. 외부 AI가 준 결과를 붙여넣기</Text>
             <Field
               value={pasted}
               onChangeText={setPasted}
-              placeholder="JSON이 아니어도 됩니다. 문장을 그대로 붙여넣으세요"
+              placeholder="외부 AI가 준 결과를 붙여넣으세요. JSON이 아니어도 됩니다."
               multiline
               style={{ minHeight: 92, textAlignVertical: 'top' }}
             />
-            <Btn label="붙여넣은 내용으로 정리" small onPress={analyzePasted} loading={busy} disabled={!pasted.trim()} />
+            <Btn label="붙여넣은 내용으로 정리" small onPress={analyzePasted} loading={busy && action === 'paste'} disabled={!pasted.trim() || busy} />
           </View>
 
           <View style={{ gap: 6 }}>
@@ -332,7 +397,7 @@ export default function CaptureScreen() {
         </Card>
       ) : (
         <Text style={styles.fallbackLink} onPress={() => setShowFallback(true)}>
-          잘 안 읽히나요? 다른 방법 보기
+          잘 안 읽히나요? 링크·직접 입력으로 정리하기
         </Text>
       )}
 
@@ -414,6 +479,7 @@ const styles = StyleSheet.create({
   summaryTitle: { ...font.body, color: colors.ink, fontWeight: '700' },
   summarySub: { ...font.tiny, color: colors.sub },
   label: { ...font.small, color: colors.ink, fontWeight: '700' },
+  linkSub: { ...font.tiny, color: colors.sub, lineHeight: 16 },
   progress: { flexDirection: 'row', alignItems: 'center', gap: space.md },
   progressTitle: { ...font.small, color: colors.ink, fontWeight: '700' },
   progressSub: { ...font.tiny, color: colors.sub },

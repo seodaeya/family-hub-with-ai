@@ -27,6 +27,7 @@ import {
 import { extract } from './ai/extract.ts';
 import { ollamaHealth } from './ai/ollama.ts';
 import { ocrHealthy } from './ai/ocr.ts';
+import { importUrl, UrlImportError } from './ai/url.ts';
 
 ensureDirs();
 
@@ -242,6 +243,7 @@ app.post('/v1/extract', async (request, reply) => {
     images?: Array<{ base64: string; mimeType?: string }>;
     mimeType?: string;
     text?: string;
+    url?: string;
     hint?: string;
     retain?: boolean;
     model?: string;
@@ -256,8 +258,24 @@ app.post('/v1/extract', async (request, reply) => {
       ? [{ buffer: Buffer.from(body.imageBase64, 'base64'), mimeType: body.mimeType ?? 'image/jpeg' }]
       : [];
 
-  if (!images.length && !body.text?.trim()) {
-    return reply.code(400).send({ error: 'bad_request', message: '사진이나 텍스트가 필요합니다.' });
+  // Import a public link (Gemini share, school notice page, …) instead of a photo.
+  let urlText: string | undefined;
+  let source: { url: string; title: string; via: string } | undefined;
+  if (!images.length && !body.text?.trim() && body.url?.trim()) {
+    try {
+      const imported = await importUrl(body.url);
+      urlText = imported.text;
+      source = { url: imported.url, title: imported.title, via: imported.via };
+    } catch (error) {
+      if (error instanceof UrlImportError) {
+        return reply.code(400).send({ error: 'url_failed', message: error.message });
+      }
+      throw error;
+    }
+  }
+
+  if (!images.length && !body.text?.trim() && !urlText) {
+    return reply.code(400).send({ error: 'bad_request', message: '사진, 텍스트, 링크 중 하나가 필요합니다.' });
   }
 
   let photoRef: string | null = null;
@@ -274,17 +292,18 @@ app.post('/v1/extract', async (request, reply) => {
     for (const image of images) {
       results.push(await extract({ image: image.buffer, mimeType: image.mimeType, hint: body.hint, model }));
     }
-    if (!images.length) results.push(await extract({ text: body.text, hint: body.hint, model }));
+    if (!images.length) results.push(await extract({ text: body.text ?? urlText, hint: body.hint, model }));
 
     const merged = mergeResults(results);
     audit(device.familyId, device.id, 'extract', {
-      mode: merged.mode,
+      mode: source ? 'url' : merged.mode,
       images: images.length,
       events: merged.events.length,
       items: merged.items.length,
       ms: merged.meta.totalMs,
+      url: source?.url,
     });
-    return { ...merged, photoRef };
+    return { ...merged, photoRef, source };
   } catch (error) {
     request.log.error(error);
     return reply.code(502).send({
@@ -372,11 +391,19 @@ function mergeResults(results: Awaited<ReturnType<typeof extract>>[]) {
     ocrText: results.map((result) => result.ocrText).filter(Boolean).join('\n---\n'),
     meta: {
       ocrMs: results.reduce((sum, result) => sum + (result.meta.ocrMs ?? 0), 0),
+      ocrConfidence: worstOcrConfidence(results),
       llmMs: results.reduce((sum, result) => sum + result.meta.llmMs, 0),
       model: base.meta.model,
       totalMs: results.reduce((sum, result) => sum + result.meta.totalMs, 0),
     },
   };
+}
+
+function worstOcrConfidence(results: Awaited<ReturnType<typeof extract>>[]): number | undefined {
+  const values = results
+    .map((result) => result.meta.ocrConfidence)
+    .filter((value): value is number => typeof value === 'number');
+  return values.length ? Math.min(...values) : undefined;
 }
 
 function dedupeItems(items: Array<{ title: string }>) {

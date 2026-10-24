@@ -157,6 +157,18 @@ export default function ReviewScreen() {
         <Badge label={`${draft.result.meta.llmMs}ms · ${draft.result.meta.model}`} tone="neutral" />
       </View>
 
+      {draft.result.source ? (
+        <Card style={{ gap: 3, padding: space.md }}>
+          <Text style={styles.sourceLabel}>링크에서 가져옴</Text>
+          <Text style={styles.sourceTitle} numberOfLines={2}>
+            {draft.result.source.title || draft.result.source.url}
+          </Text>
+          <Text style={styles.sourceUrl} numberOfLines={1}>
+            {draft.result.source.url}
+          </Text>
+        </Card>
+      ) : null}
+
       {draft.result.warnings.length > 0 ? (
         <Card style={{ backgroundColor: colors.warnSoft, borderColor: colors.warnSoft, gap: 4 }}>
           {draft.result.warnings.map((warning) => (
@@ -306,6 +318,9 @@ const styles = StyleSheet.create({
   sub: { ...font.small, color: colors.sub, marginTop: 2 },
   metaRow: { flexDirection: 'row', gap: 6 },
   warning: { ...font.small, color: colors.warn, lineHeight: 19 },
+  sourceLabel: { ...font.tiny, color: colors.sub, fontWeight: '700' },
+  sourceTitle: { ...font.small, color: colors.ink, fontWeight: '700' },
+  sourceUrl: { ...font.tiny, color: colors.primary },
   itemCard: { gap: space.sm, padding: space.md },
   itemCardOff: { opacity: 0.45 },
   itemHeader: { flexDirection: 'row', alignItems: 'center', gap: space.sm },
