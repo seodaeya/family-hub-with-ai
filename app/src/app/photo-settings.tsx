@@ -164,7 +164,7 @@ export default function PhotoSettingsScreen() {
           <Chip label="맥 허브에 보관" selected={settings.location === 'hub'} onPress={() => update({ location: 'hub' })} />
         </View>
         <Hint>
-          기본값은 "분석 후 삭제"입니다. 보관을 켜면 원본이 지정한 위치에 남아 나중에 다시 볼 수 있습니다.
+          기본값은 ‘분석 후 삭제’입니다. 보관을 켜면 원본이 지정한 위치에 남아 나중에 다시 볼 수 있습니다.
         </Hint>
       </Card>
     </Screen>

@@ -5,7 +5,7 @@ import { useSession } from '@/lib/session';
 import { listEvents, listItems, toggleItem } from '@/lib/db';
 import type { EventRow, ItemRow } from '@/lib/types';
 import { addDays, endOfDay, formatDate, formatRelativeTime, formatTime, relativeDay, startOfDay } from '@/lib/format';
-import { Badge, Btn, Card, Empty, Screen, SectionTitle } from '@/components/ui';
+import { Badge, Card, Empty, Screen, SectionTitle } from '@/components/ui';
 import { BottomBar } from '@/components/bottom-bar';
 import { colors, font, radius, space } from '@/theme';
 

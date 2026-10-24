@@ -52,7 +52,6 @@ export default function CaptureScreen() {
       timer.current = null;
       return;
     }
-    setElapsed(0);
     timer.current = setInterval(() => setElapsed((value) => value + 1), 1000);
     return () => {
       if (timer.current) clearInterval(timer.current);
@@ -100,6 +99,7 @@ export default function CaptureScreen() {
 
   const analyze = async () => {
     setBusy(true);
+    setElapsed(0);
     setError(null);
     setStage('reading');
     const stageTimer = setTimeout(() => setStage('thinking'), 1800);
@@ -133,6 +133,7 @@ export default function CaptureScreen() {
   const analyzePasted = async () => {
     if (!pasted.trim()) return;
     setBusy(true);
+    setElapsed(0);
     setError(null);
     setStage('thinking');
     try {

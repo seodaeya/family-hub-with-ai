@@ -5,7 +5,7 @@ import { deleteItem, listItems, saveItem, toggleItem } from '@/lib/db';
 import { useSession } from '@/lib/session';
 import type { ItemRow, ListType } from '@/lib/types';
 import { formatDate } from '@/lib/format';
-import { Btn, Card, Chip, Empty, Field, Screen } from '@/components/ui';
+import { Btn, Card, Empty, Field, Screen } from '@/components/ui';
 import { BottomBar } from '@/components/bottom-bar';
 import { colors, font, radius, space } from '@/theme';
 

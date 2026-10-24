@@ -8,7 +8,7 @@ import {
   Text,
   View,
 } from 'react-native';
-import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
+import { useFocusEffect, useLocalSearchParams } from 'expo-router';
 import { deleteEvent, listEvents, saveEvent } from '@/lib/db';
 import { rescheduleNotifications } from '@/lib/notify';
 import { useSession } from '@/lib/session';
@@ -16,12 +16,11 @@ import type { EventRow } from '@/lib/types';
 import { addDays, dateKey, formatDate, formatTime, fromLocalInput, startOfDay, toLocalInput } from '@/lib/format';
 import { Badge, Btn, Card, Empty, Field, Hint, Screen } from '@/components/ui';
 import { BottomBar } from '@/components/bottom-bar';
-import { colors, font, radius, space } from '@/theme';
+import { colors, font, space } from '@/theme';
 
 type Section = { title: string; subtitle: string; data: EventRow[] };
 
 export default function ScheduleScreen() {
-  const router = useRouter();
   const params = useLocalSearchParams<{ new?: string }>();
   const { syncNow } = useSession();
   const [sections, setSections] = useState<Section[]>([]);

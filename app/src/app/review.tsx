@@ -9,7 +9,7 @@ import { peekDraft, takeDraft } from '@/lib/store';
 import type { ListType } from '@/lib/types';
 import { fromLocalInput, toLocalInput } from '@/lib/format';
 import { Badge, Btn, Card, Chip, Empty, Field, Hint, Screen, SectionTitle } from '@/components/ui';
-import { colors, font, radius, space } from '@/theme';
+import { colors, font, space } from '@/theme';
 
 type DraftEvent = {
   selected: boolean;
@@ -129,7 +129,6 @@ export default function ReviewScreen() {
         await savePhotoLocally(draft.images[0].base64);
       }
 
-      const { listEvents } = await import('@/lib/db');
       await rescheduleNotifications(await listEvents(new Date().toISOString()));
       takeDraft();
       syncNow().catch(() => {});

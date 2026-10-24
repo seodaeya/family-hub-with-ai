@@ -169,7 +169,7 @@ export default function DevicesScreen() {
               <>
                 <Btn label="초대 코드 만들기" onPress={makeInvite} loading={busy} />
                 <Hint>
-                  새 기기에서 앱 → 서버 주소 입력 → 이 코드를 넣으면 "승인 대기" 상태가 됩니다. 아래 목록에서 승인해야 사용할 수 있습니다.
+                  새 기기에서 앱 → 서버 주소 입력 → 이 코드를 넣으면 ‘승인 대기’ 상태가 됩니다. 아래 목록에서 승인해야 사용할 수 있습니다.
                 </Hint>
               </>
             )}
