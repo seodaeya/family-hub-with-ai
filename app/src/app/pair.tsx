@@ -1,13 +1,16 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { Linking, StyleSheet, Text, View } from 'react-native';
 import { useSession } from '@/lib/session';
 import { ApiError, healthAt, type Health } from '@/lib/api';
+import { suggestedHubUrl } from '@/lib/hub-url';
 import { Btn, Card, Field, Hint, Screen } from '@/components/ui';
 import { colors, font, radius, space } from '@/theme';
 
 export default function PairScreen() {
   const { connect } = useSession();
-  const [url, setUrl] = useState('');
+  // Filled from the Mac's Metro address, so the usual case needs no typing.
+  const detected = useMemo(() => suggestedHubUrl(), []);
+  const [url, setUrl] = useState(() => suggestedHubUrl());
   const [code, setCode] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -73,7 +76,28 @@ export default function PairScreen() {
           placeholder="http://192.168.0.10:4317"
           keyboardType="url"
         />
-        <Btn label="서버 상태 확인" variant="secondary" small onPress={checkServer} loading={busy && !code} />
+        <View style={styles.addressRow}>
+          <Btn
+            label="서버 상태 확인"
+            variant="secondary"
+            small
+            onPress={checkServer}
+            loading={busy && !code}
+            style={{ flex: 1 }}
+          />
+          <Btn
+            label="주소 자동 입력"
+            variant="ghost"
+            small
+            onPress={() => setUrl(detected)}
+            disabled={!detected}
+          />
+        </View>
+        <Hint>
+          {detected
+            ? '맥의 주소를 자동으로 채웠습니다. 다르면 직접 수정하세요.'
+            : 'npm run init 출력에 나오는 http://192.168.x.x:4317 을 입력하세요.'}
+        </Hint>
         {health ? (
           <View style={styles.healthBox}>
             <Text style={styles.healthLine}>
@@ -126,6 +150,7 @@ const styles = StyleSheet.create({
     gap: 2,
   },
   code: { color: '#E9E4DC', fontFamily: 'Menlo', fontSize: 12 },
+  addressRow: { flexDirection: 'row', gap: 8, alignItems: 'center' },
   healthBox: { backgroundColor: colors.goodSoft, padding: space.md, borderRadius: radius.sm, gap: 2 },
   healthLine: { ...font.small, color: colors.good, fontWeight: '700' },
   healthSub: { ...font.tiny, color: colors.sub },
