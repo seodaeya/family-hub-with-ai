@@ -1,5 +1,5 @@
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, TextInput, View, type StyleProp, type TextInputProps, type ViewStyle } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { colors, font, radius, space } from '@/theme';
 
 export function Screen({
@@ -13,14 +13,28 @@ export function Screen({
   padded?: boolean;
   style?: StyleProp<ViewStyle>;
 }) {
+  // Applied by hand instead of SafeAreaView so the extra breathing room below
+  // the status bar is identical on every device (it used to look glued to the top).
+  const insets = useSafeAreaInsets();
   const content = (
-    <View style={[padded && { padding: space.lg }, { gap: space.md }, style]}>{children}</View>
+    <View
+      style={[
+        {
+          paddingTop: insets.top + space.lg,
+          ...(padded ? { paddingHorizontal: space.lg } : null),
+        },
+        { gap: space.md },
+        style,
+      ]}
+    >
+      {children}
+    </View>
   );
   return (
-    <SafeAreaView style={styles.screen} edges={['top']}>
+    <View style={styles.screen}>
       {scroll ? (
         <ScrollView
-          contentContainerStyle={{ paddingBottom: 120 }}
+          contentContainerStyle={{ paddingBottom: 150 }}
           keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}
         >
@@ -29,7 +43,43 @@ export function Screen({
       ) : (
         content
       )}
-    </SafeAreaView>
+    </View>
+  );
+}
+
+/** Title block with an explicit back button — pushed screens have no header. */
+export function ScreenHeader({
+  title,
+  sub,
+  onBack,
+  right,
+}: {
+  title: string;
+  sub?: string;
+  onBack?: () => void;
+  right?: React.ReactNode;
+}) {
+  return (
+    <View style={{ gap: space.xs }}>
+      {onBack ? (
+        <Pressable
+          onPress={onBack}
+          hitSlop={12}
+          accessibilityRole="button"
+          accessibilityLabel="뒤로"
+          style={({ pressed }) => [styles.back, pressed && { opacity: 0.6 }]}
+        >
+          <Text style={styles.backText}>‹ 뒤로</Text>
+        </Pressable>
+      ) : null}
+      <View style={styles.headerRow}>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.h1}>{title}</Text>
+          {sub ? <Text style={styles.sub}>{sub}</Text> : null}
+        </View>
+        {right}
+      </View>
+    </View>
   );
 }
 
@@ -178,6 +228,11 @@ export function Hint({ children }: { children: React.ReactNode }) {
 
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.bg },
+  back: { alignSelf: 'flex-start', paddingVertical: 2, paddingRight: 8 },
+  backText: { ...font.small, color: colors.primary, fontWeight: '700' },
+  headerRow: { flexDirection: 'row', alignItems: 'flex-start', gap: space.sm },
+  h1: { ...font.h1, color: colors.ink },
+  sub: { ...font.small, color: colors.sub, marginTop: 2, lineHeight: 19 },
   card: {
     backgroundColor: colors.card,
     borderRadius: radius.lg,

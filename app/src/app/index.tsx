@@ -2,8 +2,8 @@ import { useCallback, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useSession } from '@/lib/session';
-import { listEvents, listItems, toggleItem } from '@/lib/db';
-import type { EventRow, ItemRow } from '@/lib/types';
+import { getPhotoSettings, listEvents, listItems, toggleItem } from '@/lib/db';
+import type { EventRow, ItemRow, PhotoSettings } from '@/lib/types';
 import { addDays, endOfDay, formatDate, formatRelativeTime, formatTime, relativeDay, startOfDay } from '@/lib/format';
 import { Badge, Card, Empty, Screen, SectionTitle } from '@/components/ui';
 import { BottomBar } from '@/components/bottom-bar';
@@ -14,15 +14,18 @@ export default function HomeScreen() {
   const router = useRouter();
   const [events, setEvents] = useState<EventRow[]>([]);
   const [items, setItems] = useState<ItemRow[]>([]);
+  const [photoSettings, setPhotoSettings] = useState<PhotoSettings | null>(null);
 
   const load = useCallback(async () => {
     const now = new Date();
-    const [eventsNext, allItems] = await Promise.all([
+    const [eventsNext, allItems, settings] = await Promise.all([
       listEvents(startOfDay(now).toISOString(), addDays(endOfDay(now), 14).toISOString()),
       listItems(),
+      getPhotoSettings(),
     ]);
     setEvents(eventsNext);
     setItems(allItems);
+    setPhotoSettings(settings);
   }, []);
 
   useFocusEffect(
@@ -77,6 +80,23 @@ export default function HomeScreen() {
           <Text style={styles.quickText}>장보기</Text>
         </Pressable>
       </View>
+
+      <Pressable
+        onPress={() => router.push('/photo-settings')}
+        accessibilityRole="button"
+        accessibilityLabel="사진 크기와 화질 설정 열기"
+        style={({ pressed }) => [styles.photoRow, pressed && { opacity: 0.65 }]}
+      >
+        <Text style={styles.photoLabel}>사진 품질 · 크기</Text>
+        <Text style={styles.photoValue}>
+          {photoSettings
+            ? photoSettings.mode === 'preset'
+              ? `원본의 ${photoSettings.preset}%`
+              : `${photoSettings.maxDimension}px · ${Math.round(photoSettings.jpegQuality * 100)}%`
+            : '기본값'}{' '}
+          ›
+        </Text>
+      </Pressable>
 
       <View style={styles.statsRow}>
         <Stat label="오늘 일정" value={todayEvents.length} tone={colors.primary} />
@@ -198,6 +218,17 @@ const styles = StyleSheet.create({
   quickIcon: { fontSize: 20 },
   quickText: { ...font.small, color: colors.ink, fontWeight: '700' },
   statsRow: { flexDirection: 'row', gap: space.sm },
+  photoRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: colors.cardAlt,
+    borderRadius: radius.md,
+    paddingHorizontal: space.md,
+    paddingVertical: 10,
+  },
+  photoLabel: { ...font.small, color: colors.ink, fontWeight: '600' },
+  photoValue: { ...font.small, color: colors.primary, fontWeight: '700' },
   stat: {
     flex: 1,
     backgroundColor: colors.card,

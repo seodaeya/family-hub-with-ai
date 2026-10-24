@@ -87,6 +87,24 @@ export async function deletePhotoLocally(uri: string): Promise<void> {
   }
 }
 
+export type PhotoStorage = { dir: string; count: number; bytes: number };
+
+/** What is actually sitting in this device's photo folder (for the settings screen). */
+export async function photoStorageSummary(): Promise<PhotoStorage> {
+  try {
+    await ensurePhotoDir();
+    const files = (await FileSystem.readDirectoryAsync(PHOTO_DIR)).filter((file) => file.endsWith('.jpg'));
+    let bytes = 0;
+    for (const file of files) {
+      const info = await FileSystem.getInfoAsync(`${PHOTO_DIR}${file}`);
+      if (info.exists) bytes += info.size ?? 0;
+    }
+    return { dir: PHOTO_DIR, count: files.length, bytes };
+  } catch {
+    return { dir: PHOTO_DIR, count: 0, bytes: 0 };
+  }
+}
+
 /** Deletes photos older than the retention window. */
 export async function cleanupOldPhotos(settings: PhotoSettings): Promise<number> {
   if (settings.retention === 'keep') return 0;

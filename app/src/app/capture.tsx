@@ -1,9 +1,9 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Image, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import * as Clipboard from 'expo-clipboard';
 import * as Sharing from 'expo-sharing';
-import { useRouter } from 'expo-router';
+import { useFocusEffect, useRouter } from 'expo-router';
 import { api, ApiError } from '@/lib/api';
 import { getAiSettings, getPhotoSettings, defaultPhotoSettings } from '@/lib/db';
 import { prepareImage, type PreparedImage } from '@/lib/photo';
@@ -42,9 +42,15 @@ export default function CaptureScreen() {
   const timer = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
-    getPhotoSettings().then(setPhotoSettings);
     getAiSettings().then(setAiSettings);
   }, []);
+
+  // Re-read on focus: the quality screen can be opened from the summary card.
+  useFocusEffect(
+    useCallback(() => {
+      getPhotoSettings().then(setPhotoSettings);
+    }, []),
+  );
 
   useEffect(() => {
     if (!busy) {
@@ -185,25 +191,46 @@ export default function CaptureScreen() {
         </Pressable>
       </View>
 
+      <Pressable
+        onPress={() => router.push('/photo-settings')}
+        accessibilityRole="button"
+        accessibilityLabel="사진 크기와 화질 바꾸기"
+        style={({ pressed }) => [styles.qualityRow, pressed && { opacity: 0.7 }]}
+      >
+        <Text style={styles.qualityRowIcon}>🖼</Text>
+        <Text style={styles.qualityRowText}>사진 품질 · {qualityValue(photoSettings)}</Text>
+        <Text style={styles.qualityRowHint}>바꾸기</Text>
+        <Text style={styles.qualityChevron}>›</Text>
+      </Pressable>
+
       {photos.length > 0 ? (
-        <>
+        <View style={{ gap: space.sm, marginTop: space.xs }}>
           <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 10, paddingVertical: 4 }}>
-            {photos.map((photo, index) => (
-              <View key={`${photo.uri}-${index}`} style={styles.thumbWrap}>
-                <Image source={{ uri: photo.uri }} style={styles.thumb} />
-                <Pressable
-                  style={styles.thumbRemove}
-                  onPress={() => setPhotos((current) => current.filter((_, i) => i !== index))}
-                  disabled={busy}
-                >
-                  <Text style={styles.thumbRemoveText}>✕</Text>
-                </Pressable>
-                <Text style={styles.thumbMeta}>
-                  {photo.width}×{photo.height} · {formatBytes(photo.bytes)}
-                </Text>
-              </View>
-            ))}
+            {photos.map((photo, index) => {
+              const width = thumbWidth(photo);
+              return (
+                <View key={`${photo.uri}-${index}`} style={[styles.thumbWrap, { width }]}>
+                  <Image
+                    source={{ uri: photo.uri }}
+                    style={[styles.thumb, { width, height: THUMB_HEIGHT }]}
+                    resizeMode="contain"
+                  />
+                  <Pressable
+                    style={styles.thumbRemove}
+                    onPress={() => setPhotos((current) => current.filter((_, i) => i !== index))}
+                    disabled={busy}
+                    hitSlop={8}
+                  >
+                    <Text style={styles.thumbRemoveText}>✕</Text>
+                  </Pressable>
+                  <Text style={styles.thumbMeta} numberOfLines={1}>
+                    {photo.width}×{photo.height} · {formatBytes(photo.bytes)}
+                  </Text>
+                </View>
+              );
+            })}
           </ScrollView>
+
           <Card style={styles.summary}>
             <View style={{ flex: 1 }}>
               <Text style={styles.summaryTitle}>사진 {photos.length}장</Text>
@@ -213,7 +240,8 @@ export default function CaptureScreen() {
             </View>
             <Badge label={photoSettings?.mode === 'preset' ? `원본의 ${photoSettings.preset}%` : '상세 설정'} tone="neutral" />
           </Card>
-        </>
+          <Text style={styles.thumbHint}>사진 비율은 원본 그대로 유지됩니다. 위의 ‘사진 품질’에서 크기와 화질을 바꿀 수 있습니다.</Text>
+        </View>
       ) : null}
 
       <Field
@@ -315,6 +343,19 @@ export default function CaptureScreen() {
   );
 }
 
+const THUMB_HEIGHT = 120;
+
+/** Keeps each thumbnail's own aspect ratio instead of cropping it into a square. */
+function thumbWidth(photo: PreparedImage): number {
+  const ratio = photo.height > 0 ? photo.width / photo.height : 0.75;
+  return Math.round(Math.min(180, Math.max(64, ratio * THUMB_HEIGHT)));
+}
+
+function qualityValue(settings: PhotoSettings | null): string {
+  if (!settings) return '기본';
+  return settings.mode === 'preset' ? `${settings.preset}%` : `${settings.maxDimension}px`;
+}
+
 const styles = StyleSheet.create({
   header: { flexDirection: 'row', alignItems: 'flex-start', gap: space.sm },
   title: { ...font.h1, color: colors.ink },
@@ -332,8 +373,14 @@ const styles = StyleSheet.create({
   },
   pickerIcon: { fontSize: 22 },
   pickerText: { ...font.small, color: colors.ink, fontWeight: '600' },
-  thumbWrap: { gap: 4, width: 128 },
-  thumb: { width: 128, height: 128, borderRadius: radius.md, backgroundColor: colors.cardAlt },
+  thumbWrap: { gap: 4 },
+  thumb: {
+    height: THUMB_HEIGHT,
+    borderRadius: radius.md,
+    backgroundColor: colors.cardAlt,
+    borderWidth: 1,
+    borderColor: colors.line,
+  },
   thumbRemove: {
     position: 'absolute',
     top: 6,
@@ -347,6 +394,22 @@ const styles = StyleSheet.create({
   },
   thumbRemoveText: { color: '#fff', fontSize: 11, fontWeight: '700' },
   thumbMeta: { ...font.tiny, color: colors.sub },
+  thumbHint: { ...font.tiny, color: colors.sub, lineHeight: 16 },
+  qualityRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: colors.card,
+    borderWidth: 1,
+    borderColor: colors.line,
+    borderRadius: radius.md,
+    paddingHorizontal: space.md,
+    paddingVertical: 12,
+  },
+  qualityRowIcon: { fontSize: 15 },
+  qualityRowText: { ...font.small, color: colors.ink, fontWeight: '600', flex: 1 },
+  qualityRowHint: { ...font.tiny, color: colors.primary },
+  qualityChevron: { ...font.body, color: colors.sub, marginTop: -1 },
   summary: { flexDirection: 'row', alignItems: 'center', gap: space.sm, paddingVertical: space.md },
   summaryTitle: { ...font.body, color: colors.ink, fontWeight: '700' },
   summarySub: { ...font.tiny, color: colors.sub },

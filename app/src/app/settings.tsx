@@ -1,13 +1,14 @@
 import { useCallback, useState } from 'react';
-import { Alert, Share, StyleSheet, Text, View } from 'react-native';
+import { Alert, Pressable, Share, StyleSheet, Text, View } from 'react-native';
 import { useFocusEffect, useRouter } from 'expo-router';
 import * as FileSystem from 'expo-file-system/legacy';
 import { clearEverything, useSession } from '@/lib/session';
 import { getAiSettings, getPhotoSettings, listEvents, listItems, saveAiSettings } from '@/lib/db';
 import type { AiSettings, PhotoSettings } from '@/lib/types';
-import { formatRelativeTime } from '@/lib/format';
+import { formatBytes, formatRelativeTime } from '@/lib/format';
+import { photoStorageSummary, type PhotoStorage } from '@/lib/photo';
 import { notificationsAvailable } from '@/lib/notify';
-import { Badge, Btn, Card, Divider, Hint, Row, Screen, SectionTitle } from '@/components/ui';
+import { Badge, Btn, Card, Divider, Hint, Row, Screen, ScreenHeader, SectionTitle } from '@/components/ui';
 import { BottomBar } from '@/components/bottom-bar';
 import { colors, font, space } from '@/theme';
 
@@ -17,12 +18,14 @@ export default function SettingsScreen() {
   const [photo, setPhoto] = useState<PhotoSettings | null>(null);
   const [ai, setAi] = useState<AiSettings | null>(null);
   const [notifOk, setNotifOk] = useState<boolean | null>(null);
+  const [photoStore, setPhotoStore] = useState<PhotoStorage | null>(null);
 
   useFocusEffect(
     useCallback(() => {
       getPhotoSettings().then(setPhoto);
       getAiSettings().then(setAi);
       notificationsAvailable().then(setNotifOk);
+      photoStorageSummary().then(setPhotoStore);
     }, []),
   );
 
@@ -58,10 +61,7 @@ export default function SettingsScreen() {
 
   return (
     <Screen>
-      <View>
-        <Text style={styles.title}>설정</Text>
-        <Text style={styles.sub}>집 안의 맥과 연결되어 있습니다</Text>
-      </View>
+      <ScreenHeader title="설정" sub="집 안의 맥과 연결되어 있습니다" />
 
       <Card>
         <Row style={{ justifyContent: 'space-between' }}>
@@ -147,6 +147,22 @@ export default function SettingsScreen() {
         <PressableRow label="이 기기 데이터 다시 받기" hint="로컬 캐시 삭제 후 서버에서 복원" onPress={resetLocal} danger />
       </Card>
 
+      <SectionTitle title="저장 위치" />
+      <Card style={{ gap: space.sm }}>
+        <Text style={styles.cardTitle}>이 기기 (안드로이드폰)</Text>
+        <Text style={styles.storeLine}>일정·목록 DB · family-hub.db</Text>
+        <Text style={styles.storeLine}>
+          사진 · {photoStore ? `${photoStore.count}장 · ${formatBytes(photoStore.bytes)}` : '확인 중'}
+        </Text>
+        <Divider />
+        <Text style={styles.cardTitle}>맥 (가족 허브)</Text>
+        <Text style={styles.storeLine}>DB · hub/data/hub.db</Text>
+        <Text style={styles.storeLine}>사진 · hub/data/photos/</Text>
+        <Hint>
+          앱은 이 기기에 먼저 저장하고, 맥이 켜져 있으면 같은 내용을 맞춰 둡니다. 사진 원본은 보관 설정을 켠 경우에만 남습니다.
+        </Hint>
+      </Card>
+
       <SectionTitle title="연결" />
       <Card style={{ gap: space.md }}>
         <Btn label="연결 해제" variant="danger" onPress={disconnectDevice} />
@@ -174,16 +190,18 @@ function PressableRow({
   danger?: boolean;
 }) {
   return (
-    <Text
+    <Pressable
       onPress={onPress}
-      style={[styles.pressableRow, danger && { color: colors.danger }]}
-      suppressHighlighting
+      accessibilityRole="button"
+      accessibilityLabel={label}
+      style={({ pressed }) => [styles.pressableRow, pressed && { opacity: 0.55 }]}
     >
-      <Text>
-        <Text style={{ ...font.body, color: danger ? colors.danger : colors.ink }}>{label}</Text>
-        {hint ? <Text style={styles.rowHint}>{`\n${hint}`}</Text> : null}
-      </Text>
-    </Text>
+      <View style={{ flex: 1, gap: 2 }}>
+        <Text style={[styles.rowLabel, danger && { color: colors.danger }]}>{label}</Text>
+        {hint ? <Text style={styles.rowHint}>{hint}</Text> : null}
+      </View>
+      <Text style={styles.chevron}>›</Text>
+    </Pressable>
   );
 }
 
@@ -196,13 +214,14 @@ function qualityLabel(settings: PhotoSettings): string {
 }
 
 const styles = StyleSheet.create({
-  title: { ...font.h1, color: colors.ink },
-  sub: { ...font.small, color: colors.sub, marginTop: 2 },
   cardTitle: { ...font.h3, color: colors.ink },
   server: { ...font.tiny, color: colors.sub },
+  storeLine: { ...font.small, color: colors.sub },
   label: { ...font.small, color: colors.sub },
   value: { ...font.small, color: colors.ink, fontWeight: '600' },
-  pressableRow: { paddingVertical: space.md },
+  pressableRow: { flexDirection: 'row', alignItems: 'center', gap: space.sm, paddingVertical: space.md },
+  rowLabel: { ...font.body, color: colors.ink },
   rowHint: { ...font.tiny, color: colors.sub },
+  chevron: { ...font.h2, color: colors.sub },
   footer: { ...font.tiny, color: colors.sub, textAlign: 'center', lineHeight: 17, marginTop: space.md },
 });

@@ -1,5 +1,6 @@
 import { useRouter } from 'expo-router';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { colors, font, radius, space } from '@/theme';
 
 const TABS = [
@@ -11,8 +12,9 @@ const TABS = [
 
 export function BottomBar({ active }: { active: (typeof TABS)[number]['key'] }) {
   const router = useRouter();
+  const insets = useSafeAreaInsets();
   return (
-    <View style={styles.wrap}>
+    <View style={[styles.wrap, { bottom: Math.max(24, insets.bottom + 12) }]}>
       <View style={styles.bar}>
         {TABS.map((tab) => {
           const isActive = tab.key === active;

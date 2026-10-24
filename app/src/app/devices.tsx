@@ -1,14 +1,15 @@
 import { useCallback, useState } from 'react';
 import { Alert, Pressable, Share, StyleSheet, Text, View } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
-import { useFocusEffect } from 'expo-router';
+import { useFocusEffect, useRouter } from 'expo-router';
 import { useSession } from '@/lib/session';
 import type { DeviceInfo } from '@/lib/types';
 import { formatRelativeTime } from '@/lib/format';
-import { Badge, Btn, Card, Empty, Hint, Screen, SectionTitle } from '@/components/ui';
+import { Badge, Btn, Card, Empty, Hint, Screen, ScreenHeader, SectionTitle } from '@/components/ui';
 import { colors, font, radius, space } from '@/theme';
 
 export default function DevicesScreen() {
+  const router = useRouter();
   const { device: current, device: me, refreshDevices, approveDevice, revokeDevice, createInvite } = useSession();
   const [devices, setDevices] = useState<DeviceInfo[]>([]);
   const [invite, setInvite] = useState<{ code: string; expiresAt: number } | null>(null);
@@ -76,10 +77,11 @@ export default function DevicesScreen() {
 
   return (
     <Screen>
-      <View>
-        <Text style={styles.title}>기기 관리</Text>
-        <Text style={styles.sub}>승인된 기기만 가족 데이터를 읽고 쓸 수 있습니다</Text>
-      </View>
+      <ScreenHeader
+        title="기기 관리"
+        sub="승인된 기기만 가족 데이터를 읽고 쓸 수 있습니다"
+        onBack={() => router.back()}
+      />
 
       {!isParent ? (
         <Card style={{ backgroundColor: colors.warnSoft, borderColor: colors.warnSoft }}>
@@ -201,7 +203,7 @@ export default function DevicesScreen() {
 const styles = StyleSheet.create({
   title: { ...font.h1, color: colors.ink },
   sub: { ...font.small, color: colors.sub, marginTop: 2 },
-  deviceRow: { flexDirection: 'row', alignItems: 'center', gap: space.sm },
+deviceRow: { flexDirection: 'row', alignItems: 'center', gap: space.sm },
   deviceName: { ...font.body, color: colors.ink, fontWeight: '700' },
   deviceMeta: { ...font.tiny, color: colors.sub, marginTop: 2 },
   remove: { ...font.small, color: colors.danger },
