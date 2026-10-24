@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Alert, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Alert, Image, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import { getPhotoSettings, listEvents, saveEvent, saveItem, saveSource } from '@/lib/db';
 import { rescheduleNotifications } from '@/lib/notify';
@@ -13,6 +13,7 @@ import { colors, font, space } from '@/theme';
 
 type DraftEvent = {
   selected: boolean;
+  target: 'event' | 'list';
   title: string;
   date: string;
   time: string;
@@ -23,6 +24,7 @@ type DraftEvent = {
 
 type DraftItem = {
   selected: boolean;
+  target: 'list' | 'event';
   title: string;
   listType: ListType;
   qty: string;
@@ -39,6 +41,7 @@ export default function ReviewScreen() {
   const [events, setEvents] = useState<DraftEvent[]>(() =>
     (draft?.result.events ?? []).map((event) => ({
       selected: true,
+      target: 'event',
       title: event.title,
       date: event.startsAt ? toLocalInput(event.startsAt).slice(0, 10) : '',
       time: event.allDay || !event.startsAt ? '09:00' : toLocalInput(event.startsAt).slice(11, 16),
@@ -50,6 +53,7 @@ export default function ReviewScreen() {
   const [items, setItems] = useState<DraftItem[]>(() =>
     (draft?.result.items ?? []).map((item) => ({
       selected: true,
+      target: 'list',
       title: item.title,
       listType: item.listType,
       qty: item.qty ?? '',
@@ -85,9 +89,14 @@ export default function ReviewScreen() {
     setItems((current) => current.map((item, i) => (i === index ? { ...item, ...patch } : item)));
 
   const save = async () => {
-    const missingDate = selectedEvents.find((event) => !event.date.trim());
-    if (missingDate) {
-      Alert.alert('날짜가 없습니다', `"${missingDate.title || '제목 없음'}" 일정의 날짜를 입력해 주세요.`);
+    const missingEventDate = selectedEvents.find((event) => event.target === 'event' && !event.date.trim());
+    if (missingEventDate) {
+      Alert.alert('날짜가 없습니다', `"${missingEventDate.title || '제목 없음'}" 일정의 날짜를 입력해 주세요.`);
+      return;
+    }
+    const missingItemDate = selectedItems.find((item) => item.target === 'event' && !item.dueAt.trim());
+    if (missingItemDate) {
+      Alert.alert('날짜가 없습니다', `"${missingItemDate.title || '제목 없음'}"을 일정으로 넣으려면 날짜를 입력해 주세요.`);
       return;
     }
     setSaving(true);
@@ -101,6 +110,16 @@ export default function ReviewScreen() {
 
       for (const event of selectedEvents) {
         if (!event.title.trim()) continue;
+        if (event.target === 'list') {
+          await saveItem({
+            title: event.title.trim(),
+            listType: 'todo',
+            qty: null,
+            dueAt: event.date ? fromLocalInput(`${event.date}T00:00`) : null,
+            sourceId: source.id,
+          });
+          continue;
+        }
         const startsAt = event.date
           ? fromLocalInput(event.allDay ? `${event.date}T00:00` : `${event.date} ${event.time}`)
           : null;
@@ -115,6 +134,17 @@ export default function ReviewScreen() {
 
       for (const item of selectedItems) {
         if (!item.title.trim()) continue;
+        if (item.target === 'event') {
+          await saveEvent({
+            title: item.title.trim(),
+            startsAt: fromLocalInput(`${item.dueAt}T00:00`),
+            allDay: 1,
+            location: null,
+            memo: item.qty.trim() ? `수량 ${item.qty.trim()}` : null,
+            sourceId: source.id,
+          });
+          continue;
+        }
         await saveItem({
           title: item.title.trim(),
           listType: item.listType,
@@ -125,8 +155,10 @@ export default function ReviewScreen() {
       }
 
       const photoSettings = await getPhotoSettings();
-      if (photoSettings.retention !== 'delete' && photoSettings.location === 'device' && draft.images[0]) {
-        await savePhotoLocally(draft.images[0].base64);
+      if (photoSettings.retention !== 'delete' && photoSettings.location === 'device') {
+        for (const image of draft.images) {
+          await savePhotoLocally(image.base64);
+        }
       }
 
       await rescheduleNotifications(await listEvents(new Date().toISOString()));
@@ -156,6 +188,23 @@ export default function ReviewScreen() {
         <Badge label={`신뢰도 ${confidence}%`} tone={confidence >= 75 ? 'good' : confidence >= 50 ? 'warn' : 'danger'} />
         <Badge label={`${draft.result.meta.llmMs}ms · ${draft.result.meta.model}`} tone="neutral" />
       </View>
+
+      {draft.images.length > 0 ? (
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8 }}>
+          {draft.images.map((image, index) => {
+            const ratio = image.height > 0 ? image.width / image.height : 0.75;
+            const width = Math.round(Math.min(160, Math.max(56, ratio * 110)));
+            return (
+              <Image
+                key={`${image.uri}-${index}`}
+                source={{ uri: image.uri }}
+                style={[styles.previewImage, { width, height: 110 }]}
+                resizeMode="contain"
+              />
+            );
+          })}
+        </ScrollView>
+      ) : null}
 
       {draft.result.source ? (
         <Card style={{ gap: 3, padding: space.md }}>
@@ -194,7 +243,7 @@ export default function ReviewScreen() {
 
       {events.length > 0 ? (
         <>
-          <SectionTitle title={`일정 ${selectedEvents.length}/${events.length}`} />
+          <SectionTitle title={`일정 후보 ${selectedEvents.length}/${events.length}`} />
           <View style={{ gap: space.sm }}>
             {events.map((event, index) => (
               <Card key={`event-${index}`} style={[styles.itemCard, event.selected ? undefined : styles.itemCardOff]}>
@@ -236,6 +285,19 @@ export default function ReviewScreen() {
                   onChangeText={(location) => updateEvent(index, { location })}
                   placeholder="장소 (선택)"
                 />
+                <View style={styles.targetRow}>
+                  <Text style={styles.targetLabel}>저장 위치</Text>
+                  <Chip
+                    label="일정"
+                    selected={event.target === 'event'}
+                    onPress={() => updateEvent(index, { target: 'event' })}
+                  />
+                  <Chip
+                    label="할 일"
+                    selected={event.target === 'list'}
+                    onPress={() => updateEvent(index, { target: 'list' })}
+                  />
+                </View>
               </Card>
             ))}
           </View>
@@ -244,7 +306,7 @@ export default function ReviewScreen() {
 
       {items.length > 0 ? (
         <>
-          <SectionTitle title={`목록 ${selectedItems.length}/${items.length}`} />
+          <SectionTitle title={`목록 후보 ${selectedItems.length}/${items.length}`} />
           <View style={{ gap: space.sm }}>
             {items.map((item, index) => (
               <Card key={`item-${index}`} style={[styles.itemCard, item.selected ? undefined : styles.itemCardOff]}>
@@ -274,6 +336,28 @@ export default function ReviewScreen() {
                     onChangeText={(qty) => updateItem(index, { qty })}
                     placeholder="수량"
                     style={styles.qtyInput}
+                  />
+                </View>
+                <View style={styles.targetRow}>
+                  <Text style={styles.targetLabel}>{item.target === 'event' ? '날짜' : '마감일'}</Text>
+                  <Field
+                    value={item.dueAt}
+                    onChangeText={(dueAt) => updateItem(index, { dueAt })}
+                    placeholder="YYYY-MM-DD (선택)"
+                    style={styles.dateInput}
+                  />
+                </View>
+                <View style={styles.targetRow}>
+                  <Text style={styles.targetLabel}>저장 위치</Text>
+                  <Chip
+                    label="목록"
+                    selected={item.target === 'list'}
+                    onPress={() => updateItem(index, { target: 'list' })}
+                  />
+                  <Chip
+                    label="일정"
+                    selected={item.target === 'event'}
+                    onPress={() => updateItem(index, { target: 'event' })}
                   />
                 </View>
               </Card>
@@ -317,6 +401,12 @@ const styles = StyleSheet.create({
   title: { ...font.h1, color: colors.ink },
   sub: { ...font.small, color: colors.sub, marginTop: 2 },
   metaRow: { flexDirection: 'row', gap: 6 },
+  previewImage: {
+    borderRadius: 10,
+    backgroundColor: colors.cardAlt,
+    borderWidth: 1,
+    borderColor: colors.line,
+  },
   warning: { ...font.small, color: colors.warn, lineHeight: 19 },
   sourceLabel: { ...font.tiny, color: colors.sub, fontWeight: '700' },
   sourceTitle: { ...font.small, color: colors.ink, fontWeight: '700' },
@@ -331,6 +421,8 @@ const styles = StyleSheet.create({
   timeInput: { width: 76, backgroundColor: colors.bg },
   typeRow: { flexDirection: 'row', gap: 6, alignItems: 'center', flexWrap: 'wrap' },
   qtyInput: { width: 76, backgroundColor: colors.bg },
+  targetRow: { flexDirection: 'row', gap: 6, alignItems: 'center', flexWrap: 'wrap' },
+  targetLabel: { ...font.tiny, color: colors.sub, width: 52 },
   checkbox: {
     width: 22,
     height: 22,

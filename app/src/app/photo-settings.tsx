@@ -173,7 +173,16 @@ export default function PhotoSettingsScreen() {
         <Text style={styles.label}>저장 위치</Text>
         <View style={styles.wrap}>
           <Chip label="이 기기에만" selected={settings.location === 'device'} onPress={() => update({ location: 'device' })} />
-          <Chip label="맥 허브에 보관" selected={settings.location === 'hub'} onPress={() => update({ location: 'hub' })} />
+          <Chip
+            label="맥 허브에 보관"
+            selected={settings.location === 'hub'}
+            onPress={() =>
+              update({
+                location: 'hub',
+                ...(settings.retention === 'delete' ? { retention: '30d' } : null),
+              })
+            }
+          />
         </View>
         <Hint>
           기본값은 ‘분석 후 삭제’입니다. 보관을 켜면 원본이 지정한 위치에 남아 나중에 다시 볼 수 있습니다.
@@ -183,6 +192,7 @@ export default function PhotoSettingsScreen() {
           <Text style={styles.pathLine}>이 기기 · 앱 전용 저장소의 photos/ 폴더</Text>
           <Text style={styles.pathLine}>맥 · family-hub-with-ai/hub/data/photos/</Text>
         </View>
+        <Btn label="보관한 사진 보기" variant="secondary" small onPress={() => router.push('/photos')} />
       </Card>
     </Screen>
   );

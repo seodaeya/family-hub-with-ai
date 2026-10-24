@@ -102,8 +102,21 @@ export const api = {
     hint?: string;
     model?: string;
     retain?: boolean;
+    retainDays?: number;
   }) => request<ExtractResult>('/v1/extract', { body: input, timeoutMs: 300_000 }),
+  photos: () => request<{ photos: PhotoEntry[] }>('/v1/photos', { timeoutMs: 10_000 }),
 };
+
+export type PhotoEntry = { id: string; bytes: number; createdAt: number; preview: string | null };
+
+/** An <Image> source for a hub-stored photo (the auth header is required). */
+export function photoSource(id: string): { uri: string; headers: Record<string, string> } | null {
+  if (!baseUrl) return null;
+  return {
+    uri: `${baseUrl}/v1/photos/${encodeURIComponent(id)}`,
+    headers: token ? { authorization: `Bearer ${token}` } : {},
+  };
+}
 
 /** Health check against a URL that is not (yet) the saved server. */
 export async function healthAt(input: string): Promise<Health> {

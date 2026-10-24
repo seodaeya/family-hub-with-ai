@@ -71,9 +71,9 @@ export default function HomeScreen() {
           <Text style={styles.quickIcon}>📷</Text>
           <Text style={[styles.quickText, { color: '#fff' }]}>사진으로 추가</Text>
         </Pressable>
-        <Pressable style={styles.quick} onPress={() => router.push('/schedule?new=1')}>
-          <Text style={styles.quickIcon}>🗓</Text>
-          <Text style={styles.quickText}>일정</Text>
+        <Pressable style={styles.quick} onPress={() => router.push('/add')}>
+          <Text style={styles.quickIcon}>📝</Text>
+          <Text style={styles.quickText}>일정 추가</Text>
         </Pressable>
         <Pressable style={styles.quick} onPress={() => router.push('/lists?new=1')}>
           <Text style={styles.quickIcon}>🛒</Text>

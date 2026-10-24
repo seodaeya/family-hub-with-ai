@@ -108,6 +108,12 @@ export default function SettingsScreen() {
         <PressableRow label="기기 관리" hint="허용된 기기만 접속할 수 있습니다" onPress={() => router.push('/devices')} />
         <Divider />
         <PressableRow label="사진 · 저장 설정" hint={photo ? `${retentionLabel(photo.retention)} · ${qualityLabel(photo)}` : ''} onPress={() => router.push('/photo-settings')} />
+        <Divider />
+        <PressableRow
+          label="보관한 사진 보기"
+          hint={photoStore ? `이 기기 ${photoStore.count}장` : '사진 모아 보기'}
+          onPress={() => router.push('/photos')}
+        />
       </Card>
 
       <SectionTitle title="AI" />

@@ -89,6 +89,32 @@ export async function deletePhotoLocally(uri: string): Promise<void> {
 
 export type PhotoStorage = { dir: string; count: number; bytes: number };
 
+export type StoredPhoto = { uri: string; name: string; bytes: number; createdAt: number };
+
+/** Photos kept in this device's folder, newest first. */
+export async function listStoredPhotos(): Promise<StoredPhoto[]> {
+  try {
+    await ensurePhotoDir();
+    const files = (await FileSystem.readDirectoryAsync(PHOTO_DIR)).filter((file) => file.endsWith('.jpg'));
+    const photos: StoredPhoto[] = [];
+    for (const name of files) {
+      const uri = `${PHOTO_DIR}${name}`;
+      const info = await FileSystem.getInfoAsync(uri);
+      if (!info.exists) continue;
+      const stamp = Number(name.split('_')[0]);
+      photos.push({
+        uri,
+        name,
+        bytes: info.size ?? 0,
+        createdAt: Number.isFinite(stamp) && stamp > 0 ? stamp : Date.now(),
+      });
+    }
+    return photos.sort((a, b) => b.createdAt - a.createdAt);
+  } catch {
+    return [];
+  }
+}
+
 /** What is actually sitting in this device's photo folder (for the settings screen). */
 export async function photoStorageSummary(): Promise<PhotoStorage> {
   try {

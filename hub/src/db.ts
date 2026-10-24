@@ -97,6 +97,13 @@ CREATE TABLE IF NOT EXISTS audit_logs (
   at INTEGER NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS photo_meta (
+  id TEXT PRIMARY KEY,
+  familyId TEXT NOT NULL,
+  expiresAt INTEGER,
+  createdAt INTEGER NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_events_rev ON events(familyId, rev);
 CREATE INDEX IF NOT EXISTS idx_items_rev ON items(familyId, rev);
 CREATE INDEX IF NOT EXISTS idx_sources_rev ON sources(familyId, rev);
@@ -259,6 +266,38 @@ export function listDevices(familyId: string): Device[] {
 
 export function setDeviceStatus(id: string, status: Device['status']): void {
   db.prepare('UPDATE devices SET status = ?, approvedAt = COALESCE(approvedAt, ?) WHERE id = ?').run(status, now(), id);
+}
+
+// ---------------------------------------------------------------- photos
+
+/** Photo files kept on the hub, with the text that was extracted from them. */
+export function listPhotoSources(familyId: string): Array<{ photoRef: string; text: string | null; createdAt: number }> {
+  return db
+    .prepare(
+      'SELECT photoRef, text, createdAt FROM sources WHERE familyId = ? AND deleted = 0 AND photoRef IS NOT NULL ORDER BY createdAt DESC',
+    )
+    .all(familyId) as Array<{ photoRef: string; text: string | null; createdAt: number }>;
+}
+
+export function savePhotoMeta(input: { id: string; familyId: string; expiresAt: number | null }): void {
+  db.prepare('INSERT INTO photo_meta(id,familyId,expiresAt,createdAt) VALUES(?,?,?,?) ON CONFLICT(id) DO UPDATE SET expiresAt = excluded.expiresAt').run(
+    input.id,
+    input.familyId,
+    input.expiresAt,
+    now(),
+  );
+}
+
+/** Removes expired rows and returns their ids so the caller can unlink files. */
+export function purgeExpiredPhotos(familyId: string, nowMs = now()): string[] {
+  const rows = db
+    .prepare('SELECT id FROM photo_meta WHERE familyId = ? AND expiresAt IS NOT NULL AND expiresAt <= ?')
+    .all(familyId, nowMs) as Array<{ id: string }>;
+  if (!rows.length) return [];
+  const ids = rows.map((row) => row.id);
+  const placeholders = ids.map(() => '?').join(',');
+  db.prepare(`DELETE FROM photo_meta WHERE id IN (${placeholders})`).run(...ids);
+  return ids;
 }
 
 // ----------------------------------------------------------- pairing codes

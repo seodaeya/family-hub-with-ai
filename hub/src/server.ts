@@ -1,7 +1,7 @@
 import Fastify from 'fastify';
 import cors from '@fastify/cors';
 import { createReadStream } from 'node:fs';
-import { writeFile } from 'node:fs/promises';
+import { readdir, stat, unlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { config, ensureDirs } from './config.ts';
@@ -17,7 +17,10 @@ import {
   getDeviceByToken,
   getPairingCode,
   listDevices,
+  listPhotoSources,
   now,
+  purgeExpiredPhotos,
+  savePhotoMeta,
   pullChanges,
   setDeviceStatus,
   tx,
@@ -246,6 +249,8 @@ app.post('/v1/extract', async (request, reply) => {
     url?: string;
     hint?: string;
     retain?: boolean;
+    /** 0 or missing = keep forever, otherwise days until the hub deletes it. */
+    retainDays?: number;
     model?: string;
   };
 
@@ -278,12 +283,18 @@ app.post('/v1/extract', async (request, reply) => {
     return reply.code(400).send({ error: 'bad_request', message: '사진, 텍스트, 링크 중 하나가 필요합니다.' });
   }
 
-  let photoRef: string | null = null;
-  if (body.retain && images[0]) {
-    const ext = mimeToExt(images[0].mimeType);
-    photoRef = `${randomUUID()}.${ext}`;
-    await writeFile(join(config.dataDir, 'photos', photoRef), images[0].buffer);
+  const photoRefs: string[] = [];
+  if (body.retain && images.length) {
+    const days = typeof body.retainDays === 'number' && body.retainDays > 0 ? Math.min(body.retainDays, 3650) : 0;
+    const expiresAt = days > 0 ? now() + days * 86_400_000 : null;
+    for (const image of images) {
+      const ref = `${randomUUID()}.${mimeToExt(image.mimeType)}`;
+      await writeFile(join(config.dataDir, 'photos', ref), image.buffer);
+      savePhotoMeta({ id: ref, familyId: device.familyId, expiresAt });
+      photoRefs.push(ref);
+    }
   }
+  const photoRef = photoRefs[0] ?? null;
 
   const model = typeof body.model === 'string' && /^[a-zA-Z0-9._:\/-]{1,80}$/.test(body.model) ? body.model : undefined;
 
@@ -303,7 +314,7 @@ app.post('/v1/extract', async (request, reply) => {
       ms: merged.meta.totalMs,
       url: source?.url,
     });
-    return { ...merged, photoRef, source };
+    return { ...merged, photoRef, photoRefs, source };
   } catch (error) {
     request.log.error(error);
     return reply.code(502).send({
@@ -315,6 +326,36 @@ app.post('/v1/extract', async (request, reply) => {
 });
 
 // ---------------------------------------------------------------- photos
+
+app.get('/v1/photos', async (request, reply) => {
+  const device = await authenticate(request, reply);
+  if (!device) return;
+
+  const dir = join(config.dataDir, 'photos');
+  // The hub deletes photos whose retention window has passed.
+  for (const id of purgeExpiredPhotos(device.familyId)) {
+    await unlink(join(dir, id)).catch(() => {});
+  }
+
+  const previews = new Map(
+    listPhotoSources(device.familyId).map((row) => [row.photoRef, row.text] as const),
+  );
+  const names = await readdir(dir).catch(() => [] as string[]);
+  const photos = [];
+  for (const id of names) {
+    if (!/^[a-f0-9-]+\.(jpg|jpeg|png|webp|heic)$/i.test(id)) continue;
+    const info = await stat(join(dir, id)).catch(() => null);
+    if (!info?.isFile()) continue;
+    photos.push({
+      id,
+      bytes: info.size,
+      createdAt: Math.round(info.mtimeMs),
+      preview: previews.get(id)?.replace(/\s+/g, ' ').slice(0, 140) ?? null,
+    });
+  }
+  photos.sort((a, b) => b.createdAt - a.createdAt);
+  return { photos };
+});
 
 app.get('/v1/photos/:id', async (request, reply) => {
   const device = await authenticate(request, reply);
