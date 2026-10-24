@@ -48,7 +48,7 @@ export default function HomeScreen() {
   const syncTone = syncing ? 'primary' : outboxCount > 0 ? 'warn' : syncError ? 'danger' : 'good';
 
   return (
-    <Screen>
+    <Screen footer={<BottomBar active="home" />}>
       <View style={styles.header}>
         <View>
           <Text style={styles.family}>{family?.name ?? '우리 가족'}</Text>
@@ -165,8 +165,6 @@ export default function HomeScreen() {
         마지막 동기화 {formatRelativeTime(lastSyncAt)}
         {outboxCount > 0 ? ` · 전송 대기 ${outboxCount}건` : ''}
       </Text>
-
-      <BottomBar active="home" />
     </Screen>
   );
 }

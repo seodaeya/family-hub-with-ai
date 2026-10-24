@@ -47,7 +47,7 @@ export default function ListsScreen() {
   const placeholder = TABS.find((entry) => entry.key === tab)!.placeholder;
 
   return (
-    <Screen>
+    <Screen footer={<BottomBar active="lists" />}>
       <View>
         <Text style={styles.title}>목록</Text>
         <Text style={styles.sub}>가족이 함께 보고 체크합니다</Text>
@@ -127,8 +127,6 @@ export default function ListsScreen() {
       ) : null}
 
       <Text style={styles.footer}>체크한 내용은 가족 기기와 동기화됩니다.</Text>
-
-      <BottomBar active="lists" />
     </Screen>
   );
 }

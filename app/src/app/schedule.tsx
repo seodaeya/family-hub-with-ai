@@ -63,7 +63,7 @@ export default function ScheduleScreen() {
   const draft = editing && editing !== 'new' ? editing : null;
 
   return (
-    <Screen padded={false} scroll={false} style={{ flex: 1 }}>
+    <Screen padded={false} scroll={false} style={{ flex: 1 }} footer={<BottomBar active="schedule" />}>
       <View style={styles.header}>
         <View>
           <Text style={styles.title}>일정</Text>
@@ -111,8 +111,6 @@ export default function ScheduleScreen() {
         onSave={save}
         onDelete={draft ? () => remove(draft.id) : undefined}
       />
-
-      <BottomBar active="schedule" />
     </Screen>
   );
 }

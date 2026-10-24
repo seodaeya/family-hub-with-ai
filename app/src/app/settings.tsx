@@ -60,7 +60,7 @@ export default function SettingsScreen() {
   };
 
   return (
-    <Screen>
+    <Screen footer={<BottomBar active="settings" />}>
       <ScreenHeader title="설정" sub="집 안의 맥과 연결되어 있습니다" />
 
       <Card>
@@ -172,8 +172,6 @@ export default function SettingsScreen() {
         우리집 AI v0.1 · 로컬 우선{'\n'}
         사진과 글은 집 안의 맥에서만 처리됩니다.
       </Text>
-
-      <BottomBar active="settings" />
     </Screen>
   );
 }

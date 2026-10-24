@@ -7,11 +7,14 @@ export function Screen({
   scroll = true,
   padded = true,
   style,
+  footer,
 }: {
   children?: React.ReactNode;
   scroll?: boolean;
   padded?: boolean;
   style?: StyleProp<ViewStyle>;
+  /** Rendered outside the scroll view — use for the floating tab bar. */
+  footer?: React.ReactNode;
 }) {
   // Applied by hand instead of SafeAreaView so the extra breathing room below
   // the status bar is identical on every device (it used to look glued to the top).
@@ -43,6 +46,7 @@ export function Screen({
       ) : (
         content
       )}
+      {footer}
     </View>
   );
 }
