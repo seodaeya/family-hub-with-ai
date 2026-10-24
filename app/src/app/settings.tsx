@@ -7,6 +7,7 @@ import { getAiSettings, getPhotoSettings, listEvents, listItems, saveAiSettings 
 import { clearEverything } from '@/lib/session';
 import type { AiSettings, PhotoSettings } from '@/lib/types';
 import { formatRelativeTime } from '@/lib/format';
+import { notificationsAvailable } from '@/lib/notify';
 import { Badge, Btn, Card, Divider, Hint, Row, Screen, SectionTitle } from '@/components/ui';
 import { BottomBar } from '@/components/bottom-bar';
 import { colors, font, space } from '@/theme';
@@ -16,11 +17,13 @@ export default function SettingsScreen() {
   const { family, device, baseUrl, health, syncing, syncNow, outboxCount, lastSyncAt, disconnect, syncError } = useSession();
   const [photo, setPhoto] = useState<PhotoSettings | null>(null);
   const [ai, setAi] = useState<AiSettings | null>(null);
+  const [notifOk, setNotifOk] = useState<boolean | null>(null);
 
   useFocusEffect(
     useCallback(() => {
       getPhotoSettings().then(setPhoto);
       getAiSettings().then(setAi);
+      notificationsAvailable().then(setNotifOk);
     }, []),
   );
 
@@ -90,6 +93,12 @@ export default function SettingsScreen() {
           <Row style={{ justifyContent: 'space-between' }}>
             <Text style={styles.label}>OCR</Text>
             <Text style={styles.value}>{health.ocr.ok ? 'Apple Vision 준비됨' : '없음'}</Text>
+          </Row>
+        ) : null}
+        {notifOk === false ? (
+          <Row style={{ justifyContent: 'space-between' }}>
+            <Text style={styles.label}>일정 알림</Text>
+            <Text style={[styles.value, { color: colors.sub }]}>이 환경에서는 미지원</Text>
           </Row>
         ) : null}
         <Btn label={syncing ? '동기화 중…' : '지금 동기화'} variant="secondary" loading={syncing} onPress={() => syncNow()} />
