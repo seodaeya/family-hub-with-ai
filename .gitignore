@@ -1,0 +1,14 @@
+node_modules/
+.expo/
+dist/
+web-build/
+*.log
+.DS_Store
+.env
+
+# local family data (never commit)
+hub/data/
+ocr/bin/
+app/.expo/
+app/ios/
+app/android/
