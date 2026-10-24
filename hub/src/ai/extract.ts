@@ -67,7 +67,7 @@ export async function extract(input: {
   const qualityWarnings: string[] = [];
   if (ocrConfidence !== undefined && ocrConfidence < LOW_OCR_CONFIDENCE) {
     qualityWarnings.push(
-      '사진 글자가 흐려서 인식이 어렵습니다. 밝은 곳에서 다시 찍거나, 제미나이 공유 링크를 붙여넣어 주세요.',
+      '사진 글자가 흐려서 인식이 어렵습니다. 밝은 곳에서 다시 찍거나, 일정 추가에서 글·링크로 정리해 주세요.',
     );
   }
 
