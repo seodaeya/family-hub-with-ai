@@ -414,7 +414,7 @@ export default function CaptureScreen() {
       )}
 
       <Hint>
-        사진은 {photoSettings?.location === 'hub' ? '집의 맥에만' : '이 기기와 맥 메모리에서만'} 처리됩니다. 외부 서버로 전송되지 않습니다.
+        사진은 {photoSettings?.location === 'hub' ? '집의 맥에만' : '이 기기와 맥 메모리에서만'} 처리되고 외부 서버로 전송되지 않습니다. 링크를 가져올 때만 그 사이트에 접속합니다.
       </Hint>
     </Screen>
   );
