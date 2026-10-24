@@ -44,6 +44,13 @@ const CHROME_CANDIDATES = [
 export function normalizeImportUrl(raw: string): URL {
   const trimmed = raw.trim();
   if (!trimmed) throw new UrlImportError('링크를 입력해 주세요.');
+
+  // Reject other schemes explicitly: prefixing "ftp://…" with https: would
+  // otherwise turn it into a nonsense host and a confusing fetch error.
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed) && !/^https?:\/\//i.test(trimmed)) {
+    throw new UrlImportError('http 또는 https 링크만 가져올 수 있습니다.');
+  }
+
   const withScheme = /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
 
   let url: URL;
