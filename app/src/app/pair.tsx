@@ -7,7 +7,7 @@ import { colors, font, radius, space } from '@/theme';
 
 export default function PairScreen() {
   const { connect } = useSession();
-  const [url, setUrl] = useState('http://192.168.0.10:4317');
+  const [url, setUrl] = useState('');
   const [code, setCode] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
