@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Alert, Image, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import { getPhotoSettings, listEvents, saveEvent, saveItem, saveSource } from '@/lib/db';
@@ -6,8 +6,10 @@ import { rescheduleNotifications } from '@/lib/notify';
 import { savePhotoLocally } from '@/lib/photo';
 import { useSession } from '@/lib/session';
 import { peekDraft, takeDraft } from '@/lib/store';
-import type { ListType } from '@/lib/types';
-import { fromLocalInput, toLocalInput } from '@/lib/format';
+import type { EventRow, ListType } from '@/lib/types';
+import { addDays, formatDate, fromLocalInput, toLocalInput } from '@/lib/format';
+import { DateField, formatYmdLabel } from '@/components/date-picker';
+import { EventLinkField, type EventOption } from '@/components/event-picker';
 import { Badge, Btn, Card, Chip, Empty, Field, Hint, Screen, SectionTitle } from '@/components/ui';
 import { colors, font, space } from '@/theme';
 
@@ -29,6 +31,7 @@ type DraftItem = {
   listType: ListType;
   qty: string;
   dueAt: string;
+  linkedEventKey: string | null;
   confidence: number;
 };
 
@@ -38,6 +41,7 @@ export default function ReviewScreen() {
   const router = useRouter();
   const { syncNow } = useSession();
   const [draft] = useState(() => peekDraft());
+  const [existingEvents, setExistingEvents] = useState<EventRow[]>([]);
   const [events, setEvents] = useState<DraftEvent[]>(() =>
     (draft?.result.events ?? []).map((event) => ({
       selected: true,
@@ -50,20 +54,67 @@ export default function ReviewScreen() {
       confidence: event.confidence,
     })),
   );
-  const [items, setItems] = useState<DraftItem[]>(() =>
-    (draft?.result.items ?? []).map((item) => ({
-      selected: true,
-      target: 'list',
-      title: item.title,
-      listType: item.listType,
-      qty: item.qty ?? '',
-      dueAt: item.dueAt ? toLocalInput(item.dueAt).slice(0, 10) : '',
-      confidence: item.confidence,
-    })),
-  );
+  const [items, setItems] = useState<DraftItem[]>(() => {
+    const rawEvents = draft?.result.events ?? [];
+    return (draft?.result.items ?? []).map((item) => {
+      const dueYmd = item.dueAt ? toLocalInput(item.dueAt).slice(0, 10) : '';
+      let defaultLink: string | null = null;
+      if (item.listType !== 'shopping' && rawEvents.length > 0) {
+        if (dueYmd) {
+          const matchIdx = rawEvents.findIndex(
+            (ev) => ev.startsAt && toLocalInput(ev.startsAt).slice(0, 10) === dueYmd,
+          );
+          if (matchIdx >= 0) defaultLink = `draft:${matchIdx}`;
+        }
+        if (!defaultLink && rawEvents.length === 1) {
+          defaultLink = 'draft:0';
+        }
+      }
+      return {
+        selected: true,
+        target: 'list',
+        title: item.title,
+        listType: item.listType,
+        qty: item.qty ?? '',
+        dueAt: dueYmd,
+        linkedEventKey: defaultLink,
+        confidence: item.confidence,
+      };
+    });
+  });
   const [showText, setShowText] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const now = new Date();
+    listEvents(addDays(now, -7).toISOString(), addDays(now, 180).toISOString()).then(setExistingEvents);
+  }, []);
+
+  const eventOptions = useMemo<EventOption[]>(() => {
+    const opts: EventOption[] = [];
+    events.forEach((ev, idx) => {
+      if (ev.selected && ev.target === 'event') {
+        opts.push({
+          id: `draft:${idx}`,
+          title: ev.title.trim() || `일정 후보 ${idx + 1}`,
+          dateLabel: ev.date ? formatYmdLabel(ev.date, true) : '날짜 미정',
+          badge: '이번 추출',
+          dateYmd: ev.date || undefined,
+        });
+      }
+    });
+    existingEvents.forEach((ev) => {
+      opts.push({
+        id: `existing:${ev.id}`,
+        title: ev.title,
+        dateLabel: ev.startsAt ? formatDate(ev.startsAt) : '날짜 미정',
+        badge: '기존 일정',
+        dateYmd: ev.startsAt ? toLocalInput(ev.startsAt).slice(0, 10) : undefined,
+      });
+    });
+    return opts;
+  }, [events, existingEvents]);
 
   if (!draft) {
     return (
@@ -108,8 +159,11 @@ export default function ReviewScreen() {
         photoRef: draft.result.photoRef ?? null,
       });
 
-      for (const event of selectedEvents) {
-        if (!event.title.trim()) continue;
+      const draftEventIdMap = new Map<number, string>();
+
+      for (let i = 0; i < events.length; i += 1) {
+        const event = events[i];
+        if (!event.selected || !event.title.trim()) continue;
         if (event.target === 'list') {
           await saveItem({
             title: event.title.trim(),
@@ -123,13 +177,14 @@ export default function ReviewScreen() {
         const startsAt = event.date
           ? fromLocalInput(event.allDay ? `${event.date}T00:00` : `${event.date} ${event.time}`)
           : null;
-        await saveEvent({
+        const savedEvent = await saveEvent({
           title: event.title.trim(),
           startsAt,
           allDay: event.allDay ? 1 : 0,
           location: event.location.trim() || null,
           sourceId: source.id,
         });
+        draftEventIdMap.set(i, savedEvent.id);
       }
 
       for (const item of selectedItems) {
@@ -145,12 +200,20 @@ export default function ReviewScreen() {
           });
           continue;
         }
+        let resolvedEventId: string | null = null;
+        if (item.linkedEventKey?.startsWith('draft:')) {
+          const idx = Number(item.linkedEventKey.slice(6));
+          resolvedEventId = draftEventIdMap.get(idx) ?? null;
+        } else if (item.linkedEventKey?.startsWith('existing:')) {
+          resolvedEventId = item.linkedEventKey.slice(9) || null;
+        }
         await saveItem({
           title: item.title.trim(),
           listType: item.listType,
           qty: item.qty.trim() || null,
           dueAt: item.dueAt ? fromLocalInput(`${item.dueAt}T00:00`) : null,
           sourceId: source.id,
+          eventId: resolvedEventId,
         });
       }
 
@@ -260,10 +323,11 @@ export default function ReviewScreen() {
                   <Text style={styles.conf}>{Math.round(event.confidence * 100)}%</Text>
                 </View>
                 <View style={styles.dateRow}>
-                  <Field
+                  <DateField
                     value={event.date}
-                    onChangeText={(date) => updateEvent(index, { date })}
-                    placeholder="YYYY-MM-DD"
+                    onChange={(date) => updateEvent(index, { date })}
+                    placeholder="날짜 선택"
+                    title="일정 날짜 선택"
                     style={styles.dateInput}
                   />
                   {!event.allDay ? (
@@ -285,6 +349,30 @@ export default function ReviewScreen() {
                   onChangeText={(location) => updateEvent(index, { location })}
                   placeholder="장소 (선택)"
                 />
+                {event.target === 'event' && items.length > 0 ? (
+                  <View style={styles.targetRow}>
+                    <Text style={styles.targetLabel}>연결 항목</Text>
+                    <View style={{ flex: 1, flexDirection: 'row', flexWrap: 'wrap', gap: 6 }}>
+                      {items.map((item, itemIdx) => {
+                        if (!item.selected || item.target !== 'list') return null;
+                        const linked = item.linkedEventKey === `draft:${index}`;
+                        return (
+                          <Chip
+                            key={`link-${index}-${itemIdx}`}
+                            label={`${TYPE_LABEL[item.listType]} · ${item.title || '항목'}`}
+                            selected={linked}
+                            onPress={() =>
+                              updateItem(itemIdx, {
+                                linkedEventKey: linked ? null : `draft:${index}`,
+                                dueAt: !linked && !item.dueAt && event.date ? event.date : item.dueAt,
+                              })
+                            }
+                          />
+                        );
+                      })}
+                    </View>
+                  </View>
+                ) : null}
                 <View style={styles.targetRow}>
                   <Text style={styles.targetLabel}>저장 위치</Text>
                   <Chip
@@ -340,13 +428,32 @@ export default function ReviewScreen() {
                 </View>
                 <View style={styles.targetRow}>
                   <Text style={styles.targetLabel}>{item.target === 'event' ? '날짜' : '마감일'}</Text>
-                  <Field
+                  <DateField
                     value={item.dueAt}
-                    onChangeText={(dueAt) => updateItem(index, { dueAt })}
-                    placeholder="YYYY-MM-DD (선택)"
+                    onChange={(dueAt) => updateItem(index, { dueAt })}
+                    placeholder="마감일 선택 (선택)"
+                    title={item.target === 'event' ? '일정 날짜 선택' : '마감일 선택'}
+                    allowClear={item.target !== 'event'}
                     style={styles.dateInput}
                   />
                 </View>
+                {item.target === 'list' ? (
+                  <View style={styles.targetRow}>
+                    <Text style={styles.targetLabel}>일정 연결</Text>
+                    <EventLinkField
+                      value={item.linkedEventKey}
+                      options={eventOptions}
+                      onChange={(nextKey, opt) =>
+                        updateItem(index, {
+                          linkedEventKey: nextKey,
+                          dueAt: !item.dueAt && opt?.dateYmd ? opt.dateYmd : item.dueAt,
+                        })
+                      }
+                      placeholder="연결할 일정 선택 (선택)"
+                      style={{ flex: 1 }}
+                    />
+                  </View>
+                ) : null}
                 <View style={styles.targetRow}>
                   <Text style={styles.targetLabel}>저장 위치</Text>
                   <Chip

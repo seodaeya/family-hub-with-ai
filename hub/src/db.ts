@@ -71,6 +71,7 @@ CREATE TABLE IF NOT EXISTS items (
   assigneeId TEXT,
   done INTEGER DEFAULT 0,
   sourceId TEXT,
+  eventId TEXT,
   updatedAt INTEGER NOT NULL,
   deleted INTEGER DEFAULT 0,
   rev INTEGER NOT NULL DEFAULT 0
@@ -108,6 +109,12 @@ CREATE INDEX IF NOT EXISTS idx_events_rev ON events(familyId, rev);
 CREATE INDEX IF NOT EXISTS idx_items_rev ON items(familyId, rev);
 CREATE INDEX IF NOT EXISTS idx_sources_rev ON sources(familyId, rev);
 `);
+
+const itemColumns = db.prepare('PRAGMA table_info(items)').all() as Array<{ name: string }>;
+if (!itemColumns.some((col) => col.name === 'eventId')) {
+  db.exec('ALTER TABLE items ADD COLUMN eventId TEXT;');
+}
+db.exec('CREATE INDEX IF NOT EXISTS idx_items_event ON items(familyId, eventId);');
 
 export function now(): number {
   return Date.now();
@@ -350,7 +357,7 @@ export type Entity = 'events' | 'items' | 'sources';
 
 const FIELDS: Record<Entity, string[]> = {
   events: ['title', 'startsAt', 'endsAt', 'allDay', 'location', 'memo', 'assigneeId', 'sourceId'],
-  items: ['listType', 'title', 'qty', 'dueAt', 'assigneeId', 'done', 'sourceId'],
+  items: ['listType', 'title', 'qty', 'dueAt', 'assigneeId', 'done', 'sourceId', 'eventId'],
   sources: ['kind', 'text', 'photoRef', 'createdAt'],
 };
 

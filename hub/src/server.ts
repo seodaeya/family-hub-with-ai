@@ -225,6 +225,15 @@ app.post('/v1/sync', async (request, reply) => {
     }
   });
 
+  if (rejected.length) {
+    // The app clears rejected ops, so without this line a silently dropped edit
+    // leaves no trace on the hub.
+    request.log.warn(
+      { deviceId: device.id, device: device.name, rejected },
+      'sync ops rejected',
+    );
+  }
+
   const pulled = pullChanges(device.familyId, cursor);
   return {
     cursor: pulled.cursor,

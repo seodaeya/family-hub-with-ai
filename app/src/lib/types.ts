@@ -24,6 +24,7 @@ export type ItemRow = {
   assigneeId: string | null;
   done: number;
   sourceId: string | null;
+  eventId: string | null;
   updatedAt: number;
   deleted: number;
   rev: number;

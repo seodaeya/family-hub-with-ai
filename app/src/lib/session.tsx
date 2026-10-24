@@ -66,6 +66,8 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
   const [syncing, setSyncing] = useState(false);
   const [syncError, setSyncError] = useState<string | null>(null);
   const syncingRef = useRef(false);
+  /** Set when a sync is requested while one is already running. */
+  const syncQueuedRef = useRef(false);
 
   const deviceName = useMemo(() => {
     if (Platform.OS === 'ios') return '아이폰';
@@ -152,27 +154,47 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
     return () => clearTimeout(timer);
   }, [boot]);
 
+  const runSync = useCallback(async () => {
+    const cursor = Number((await getMeta('cursor')) ?? '0');
+    const ops = await pendingOps();
+    const result = await api.sync({ cursor, ops });
+    await applyRemote(result.changes);
+    const settled = [...result.applied, ...result.rejected.map((item) => item.opId)];
+    await clearOps(settled);
+    if (result.rejected.length) {
+      // The hub already had newer rows for these ids. Clearing the op would
+      // leave this device permanently diverged, so pull everything again and
+      // let the hub's version win.
+      syncQueuedRef.current = true;
+      await setMeta('cursor', '0');
+    } else {
+      await setMeta('cursor', String(result.cursor));
+    }
+    const successAt = Date.now();
+    await setMeta('lastSyncAt', String(successAt));
+    setLastSyncAt(successAt);
+    setOutboxCount(await pendingCount());
+    setSyncError(null);
+    const photoSettings = await getPhotoSettings();
+    await cleanupOldPhotos(photoSettings);
+    const upcoming = await listEvents(new Date().toISOString());
+    await rescheduleNotifications(upcoming);
+  }, []);
+
   const syncNow = useCallback(async () => {
-    if (syncingRef.current) return;
+    if (syncingRef.current) {
+      // A save landed while another sync was in flight. Run one more pass when
+      // it finishes instead of leaving the change for the next poll.
+      syncQueuedRef.current = true;
+      return;
+    }
     syncingRef.current = true;
     setSyncing(true);
     try {
-      const cursor = Number((await getMeta('cursor')) ?? '0');
-      const ops = await pendingOps();
-      const result = await api.sync({ cursor, ops });
-      await applyRemote(result.changes);
-      const settled = [...result.applied, ...result.rejected.map((item) => item.opId)];
-      await clearOps(settled);
-      await setMeta('cursor', String(result.cursor));
-      const successAt = Date.now();
-      await setMeta('lastSyncAt', String(successAt));
-      setLastSyncAt(successAt);
-      setOutboxCount(await pendingCount());
-      setSyncError(null);
-      const photoSettings = await getPhotoSettings();
-      await cleanupOldPhotos(photoSettings);
-      const upcoming = await listEvents(new Date().toISOString());
-      await rescheduleNotifications(upcoming);
+      do {
+        syncQueuedRef.current = false;
+        await runSync();
+      } while (syncQueuedRef.current);
     } catch (error) {
       setSyncError((error as Error).message);
       setOutboxCount(await pendingCount());
@@ -180,7 +202,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
       syncingRef.current = false;
       setSyncing(false);
     }
-  }, []);
+  }, [runSync]);
 
   const connect = useCallback(
     async (input: { url: string; code: string; deviceName?: string }) => {
@@ -260,7 +282,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
     if (status !== 'ready') return;
     const timer = setInterval(() => {
       syncNow().catch(() => {});
-    }, 60_000);
+    }, 20_000);
     const sub = AppState.addEventListener('change', (next) => {
       if (next === 'active') syncNow().catch(() => {});
     });

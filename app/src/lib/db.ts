@@ -37,6 +37,7 @@ async function open(): Promise<SQLite.SQLiteDatabase> {
       assigneeId TEXT,
       done INTEGER DEFAULT 0,
       sourceId TEXT,
+      eventId TEXT,
       updatedAt INTEGER NOT NULL,
       deleted INTEGER DEFAULT 0,
       rev INTEGER DEFAULT 0
@@ -62,6 +63,11 @@ async function open(): Promise<SQLite.SQLiteDatabase> {
     CREATE INDEX IF NOT EXISTS idx_events_start ON events(startsAt);
     CREATE INDEX IF NOT EXISTS idx_items_type ON items(listType);
   `);
+  const itemCols = await db.getAllAsync<{ name: string }>('PRAGMA table_info(items)');
+  if (!itemCols.some((col) => col.name === 'eventId')) {
+    await db.execAsync('ALTER TABLE items ADD COLUMN eventId TEXT;');
+  }
+  await db.execAsync('CREATE INDEX IF NOT EXISTS idx_items_event ON items(eventId);');
   return db;
 }
 
@@ -192,9 +198,20 @@ export async function deleteEvent(id: string): Promise<void> {
   const db = await getDb();
   const existing = await db.getFirstAsync<EventRow>('SELECT * FROM events WHERE id = ?', [id]);
   if (!existing) return;
-  const row = { ...existing, deleted: 1, updatedAt: Date.now() };
+  const now = Date.now();
+  const row = { ...existing, deleted: 1, updatedAt: now };
   await db.runAsync('UPDATE events SET deleted = 1, updatedAt = ? WHERE id = ?', [row.updatedAt, id]);
   await enqueue('events', row);
+
+  const linkedItems = await db.getAllAsync<ItemRow>(
+    'SELECT * FROM items WHERE deleted = 0 AND eventId = ?',
+    [id],
+  );
+  for (const item of linkedItems) {
+    const updated: ItemRow = { ...item, eventId: null, updatedAt: now };
+    await db.runAsync('UPDATE items SET eventId = NULL, updatedAt = ? WHERE id = ?', [now, item.id]);
+    await enqueue('items', updated);
+  }
 }
 
 export async function listEvents(fromISO?: string, toISO?: string): Promise<EventRow[]> {
@@ -224,25 +241,33 @@ export async function saveItem(input: Partial<ItemRow> & { title: string; listTy
     id: input.id ?? newId(),
     listType: input.listType,
     title: input.title,
-    qty: input.qty ?? null,
-    dueAt: input.dueAt ?? null,
-    assigneeId: input.assigneeId ?? null,
-    done: input.done ?? 0,
-    sourceId: input.sourceId ?? null,
+    qty: input.qty !== undefined ? input.qty : existing?.qty ?? null,
+    dueAt: input.dueAt !== undefined ? input.dueAt : existing?.dueAt ?? null,
+    assigneeId: input.assigneeId !== undefined ? input.assigneeId : existing?.assigneeId ?? null,
+    done: input.done !== undefined ? input.done : existing?.done ?? 0,
+    sourceId: input.sourceId !== undefined ? input.sourceId : existing?.sourceId ?? null,
+    eventId: input.eventId !== undefined ? input.eventId : existing?.eventId ?? null,
     updatedAt: Date.now(),
     deleted: input.deleted ?? 0,
     rev: existing?.rev ?? 0,
   };
   await db.runAsync(
-    `INSERT INTO items(id,listType,title,qty,dueAt,assigneeId,done,sourceId,updatedAt,deleted,rev)
-     VALUES(?,?,?,?,?,?,?,?,?,?,?)
+    `INSERT INTO items(id,listType,title,qty,dueAt,assigneeId,done,sourceId,eventId,updatedAt,deleted,rev)
+     VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
      ON CONFLICT(id) DO UPDATE SET listType=excluded.listType, title=excluded.title, qty=excluded.qty,
        dueAt=excluded.dueAt, assigneeId=excluded.assigneeId, done=excluded.done, sourceId=excluded.sourceId,
-       updatedAt=excluded.updatedAt, deleted=excluded.deleted`,
-    [row.id, row.listType, row.title, row.qty, row.dueAt, row.assigneeId, row.done, row.sourceId, row.updatedAt, row.deleted, row.rev],
+       eventId=excluded.eventId, updatedAt=excluded.updatedAt, deleted=excluded.deleted`,
+    [row.id, row.listType, row.title, row.qty, row.dueAt, row.assigneeId, row.done, row.sourceId, row.eventId, row.updatedAt, row.deleted, row.rev],
   );
   await enqueue('items', row);
   return row;
+}
+
+export async function setItemEvent(itemId: string, eventId: string | null): Promise<ItemRow | null> {
+  const db = await getDb();
+  const existing = await db.getFirstAsync<ItemRow>('SELECT * FROM items WHERE id = ?', [itemId]);
+  if (!existing) return null;
+  return saveItem({ ...existing, eventId });
 }
 
 export async function toggleItem(item: ItemRow): Promise<void> {
@@ -323,12 +348,12 @@ async function upsertRemote(entity: Entity, remote: any): Promise<void> {
     );
   } else if (entity === 'items') {
     await db.runAsync(
-      `INSERT INTO items(id,listType,title,qty,dueAt,assigneeId,done,sourceId,updatedAt,deleted,rev)
-       VALUES(?,?,?,?,?,?,?,?,?,?,?)
+      `INSERT INTO items(id,listType,title,qty,dueAt,assigneeId,done,sourceId,eventId,updatedAt,deleted,rev)
+       VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
        ON CONFLICT(id) DO UPDATE SET listType=excluded.listType, title=excluded.title, qty=excluded.qty,
          dueAt=excluded.dueAt, assigneeId=excluded.assigneeId, done=excluded.done, sourceId=excluded.sourceId,
-         updatedAt=excluded.updatedAt, deleted=excluded.deleted, rev=excluded.rev`,
-      [remote.id, remote.listType, remote.title, remote.qty, iso(remote.dueAt), remote.assigneeId, remote.done, remote.sourceId, remote.updatedAt, remote.deleted, remote.rev],
+         eventId=excluded.eventId, updatedAt=excluded.updatedAt, deleted=excluded.deleted, rev=excluded.rev`,
+      [remote.id, remote.listType, remote.title, remote.qty, iso(remote.dueAt), remote.assigneeId, remote.done, remote.sourceId, remote.eventId ?? null, remote.updatedAt, remote.deleted, remote.rev],
     );
   } else {
     await db.runAsync(

@@ -31,7 +31,12 @@ export default function HomeScreen() {
   useFocusEffect(
     useCallback(() => {
       load();
-    }, [load]),
+      // Pull the hub's changes every time the home screen opens. Without this
+      // another device's edit only showed up after the 20s poll or a restart.
+      syncNow()
+        .then(() => load())
+        .catch(() => {});
+    }, [load, syncNow]),
   );
 
   const todayKey = new Date().toDateString();
@@ -110,10 +115,23 @@ export default function HomeScreen() {
       ) : (
         <View style={{ gap: space.sm }}>
           {todayEvents.map((event) => (
-            <EventCard key={event.id} event={event} highlight />
+            <EventCard
+              key={event.id}
+              event={event}
+              linkedItems={items.filter((it) => it.eventId === event.id)}
+              onPress={() => router.push(`/schedule?eventId=${event.id}`)}
+              onToggleItem={(item) => toggleItem(item).then(load).then(() => syncNow().catch(() => {}))}
+              highlight
+            />
           ))}
           {tomorrowEvents.map((event) => (
-            <EventCard key={event.id} event={event} />
+            <EventCard
+              key={event.id}
+              event={event}
+              linkedItems={items.filter((it) => it.eventId === event.id)}
+              onPress={() => router.push(`/schedule?eventId=${event.id}`)}
+              onToggleItem={(item) => toggleItem(item).then(load).then(() => syncNow().catch(() => {}))}
+            />
           ))}
         </View>
       )}
@@ -148,16 +166,30 @@ export default function HomeScreen() {
         <Empty title="남은 할 일이 없습니다" />
       ) : (
         <Card style={{ paddingVertical: space.sm }}>
-          {tasks.map((item, index) => (
-            <View key={item.id}>
-              {index > 0 ? <View style={styles.line} /> : null}
-              <Pressable style={styles.checkRow} onPress={() => toggleItem(item).then(load)}>
-                <View style={styles.checkbox} />
-                <Text style={styles.itemTitle}>{item.title}</Text>
-                <Text style={styles.listKind}>{item.listType === 'supply' ? '준비물' : '할 일'}</Text>
-              </Pressable>
-            </View>
-          ))}
+          {tasks.map((item, index) => {
+            const linkedEv = item.eventId ? events.find((ev) => ev.id === item.eventId) : undefined;
+            return (
+              <View key={item.id}>
+                {index > 0 ? <View style={styles.line} /> : null}
+                <View style={styles.checkRow}>
+                  <Pressable hitSlop={8} onPress={() => toggleItem(item).then(load).then(() => syncNow().catch(() => {}))}>
+                    <View style={styles.checkbox} />
+                  </Pressable>
+                  <Pressable
+                    style={{ flex: 1, gap: 2 }}
+                    onPress={() => router.push(`/lists?tab=${item.listType}&itemId=${item.id}`)}
+                  >
+                    <Text style={styles.itemTitle}>{item.title}</Text>
+                    <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>
+                      {item.dueAt ? <Text style={styles.listKind}>📅 {formatDate(item.dueAt)}까지</Text> : null}
+                      {linkedEv ? <Text style={styles.linkedEventBadge}>🔗 {linkedEv.title}</Text> : null}
+                    </View>
+                  </Pressable>
+                  <Text style={styles.listKind}>{item.listType === 'supply' ? '준비물' : '할 일'}</Text>
+                </View>
+              </View>
+            );
+          })}
         </Card>
       )}
 
@@ -178,20 +210,65 @@ function Stat({ label, value, tone }: { label: string; value: number; tone: stri
   );
 }
 
-function EventCard({ event, highlight }: { event: EventRow; highlight?: boolean }) {
+function EventCard({
+  event,
+  linkedItems = [],
+  onPress,
+  onToggleItem,
+  highlight,
+}: {
+  event: EventRow;
+  linkedItems?: ItemRow[];
+  onPress?: () => void;
+  onToggleItem?: (item: ItemRow) => void;
+  highlight?: boolean;
+}) {
+  const doneCount = linkedItems.filter((it) => it.done).length;
   return (
-    <Card style={[styles.eventCard, highlight ? { borderColor: colors.primary, borderWidth: 1.5 } : undefined]}>
-      <View style={{ flex: 1, gap: 3 }}>
-        <View style={styles.eventTop}>
-          <Text style={styles.eventDate}>{relativeDay(event.startsAt)}</Text>
-          <Text style={styles.eventTime}>{event.allDay ? '종일' : formatTime(event.startsAt)}</Text>
+    <Pressable onPress={onPress}>
+      <Card style={[styles.eventCard, highlight ? { borderColor: colors.primary, borderWidth: 1.5 } : undefined]}>
+        <View style={{ flex: 1, gap: 4 }}>
+          <View style={styles.eventTop}>
+            <Text style={styles.eventDate}>{relativeDay(event.startsAt)}</Text>
+            <Text style={styles.eventTime}>{event.allDay ? '종일' : formatTime(event.startsAt)}</Text>
+            {linkedItems.length > 0 ? (
+              <Badge
+                label={`준비물·할 일 ${doneCount}/${linkedItems.length}`}
+                tone={doneCount === linkedItems.length ? 'good' : 'primary'}
+              />
+            ) : null}
+          </View>
+          <Text style={styles.eventTitle} numberOfLines={2}>
+            {event.title}
+          </Text>
+          {event.location ? <Text style={styles.eventMeta}>📍 {event.location}</Text> : null}
+          {linkedItems.length > 0 ? (
+            <View style={styles.eventLinkedWrap}>
+              {linkedItems.map((it) => (
+                <Pressable
+                  key={it.id}
+                  onPress={(e) => {
+                    e.stopPropagation();
+                    onToggleItem?.(it);
+                  }}
+                  style={[styles.eventLinkedPill, it.done ? styles.eventLinkedPillDone : undefined]}
+                >
+                  <Text style={[styles.eventLinkedCheck, it.done ? { color: colors.good } : undefined]}>
+                    {it.done ? '✓' : '○'}
+                  </Text>
+                  <Text
+                    style={[styles.eventLinkedText, it.done ? styles.eventLinkedTextDone : undefined]}
+                    numberOfLines={1}
+                  >
+                    {it.title}
+                  </Text>
+                </Pressable>
+              ))}
+            </View>
+          ) : null}
         </View>
-        <Text style={styles.eventTitle} numberOfLines={2}>
-          {event.title}
-        </Text>
-        {event.location ? <Text style={styles.eventMeta}>📍 {event.location}</Text> : null}
-      </View>
-    </Card>
+      </Card>
+    </Pressable>
   );
 }
 
@@ -257,6 +334,31 @@ const styles = StyleSheet.create({
   itemTitle: { flex: 1, ...font.body, color: colors.ink },
   qty: { ...font.tiny, color: colors.sub },
   listKind: { ...font.tiny, color: colors.sub },
+  linkedEventBadge: { ...font.tiny, color: colors.primary, fontWeight: '700' },
+  eventLinkedWrap: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+    marginTop: 4,
+    paddingTop: 6,
+    borderTopWidth: 1,
+    borderTopColor: colors.line,
+  },
+  eventLinkedPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: radius.pill,
+    backgroundColor: colors.cardAlt,
+    borderWidth: 1,
+    borderColor: colors.line,
+  },
+  eventLinkedPillDone: { opacity: 0.6 },
+  eventLinkedCheck: { ...font.tiny, color: colors.primary, fontWeight: '800' },
+  eventLinkedText: { ...font.tiny, color: colors.ink, fontWeight: '600', maxWidth: 140 },
+  eventLinkedTextDone: { textDecorationLine: 'line-through', color: colors.sub },
   line: { height: 1, backgroundColor: colors.line, marginHorizontal: 4 },
   footer: { ...font.tiny, color: colors.sub, textAlign: 'center', marginTop: space.md },
 });
