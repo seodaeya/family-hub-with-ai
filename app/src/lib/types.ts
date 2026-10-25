@@ -10,9 +10,25 @@ export type EventRow = {
   memo: string | null;
   assigneeId: string | null;
   sourceId: string | null;
+  externalId: string | null;
+  externalEtag: string | null;
+  googleLastSyncedAt: number | null;
+  googleSync: number;
+  isRepetition: number;
+  googleWarning: string | null;
   updatedAt: number;
   deleted: number;
   rev: number;
+};
+
+export type GoogleHealth = {
+  configured: boolean;
+  ok: boolean;
+  calendarSummary?: string;
+  calendarIdMasked?: string;
+  serviceAccountEmail?: string;
+  lastSyncAt?: number | null;
+  error?: string;
 };
 
 export type ItemRow = {

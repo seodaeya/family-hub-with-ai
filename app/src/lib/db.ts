@@ -24,6 +24,12 @@ async function open(): Promise<SQLite.SQLiteDatabase> {
       memo TEXT,
       assigneeId TEXT,
       sourceId TEXT,
+      externalId TEXT,
+      externalEtag TEXT,
+      googleLastSyncedAt INTEGER,
+      googleSync INTEGER DEFAULT 1,
+      isRepetition INTEGER DEFAULT 0,
+      googleWarning TEXT,
       updatedAt INTEGER NOT NULL,
       deleted INTEGER DEFAULT 0,
       rev INTEGER DEFAULT 0
@@ -68,6 +74,19 @@ async function open(): Promise<SQLite.SQLiteDatabase> {
     await db.execAsync('ALTER TABLE items ADD COLUMN eventId TEXT;');
   }
   await db.execAsync('CREATE INDEX IF NOT EXISTS idx_items_event ON items(eventId);');
+
+  const eventCols = await db.getAllAsync<{ name: string }>('PRAGMA table_info(events)');
+  const ensureEventCol = async (name: string, ddl: string) => {
+    if (!eventCols.some((col) => col.name === name)) {
+      await db.execAsync(`ALTER TABLE events ADD COLUMN ${name} ${ddl};`);
+    }
+  };
+  await ensureEventCol('externalId', 'TEXT');
+  await ensureEventCol('externalEtag', 'TEXT');
+  await ensureEventCol('googleLastSyncedAt', 'INTEGER');
+  await ensureEventCol('googleSync', 'INTEGER DEFAULT 1');
+  await ensureEventCol('isRepetition', 'INTEGER DEFAULT 0');
+  await ensureEventCol('googleWarning', 'TEXT');
   return db;
 }
 
@@ -168,27 +187,66 @@ export async function saveEvent(input: Partial<EventRow> & { title: string }): P
   const existing = input.id
     ? await db.getFirstAsync<EventRow>('SELECT * FROM events WHERE id = ?', [input.id])
     : null;
+  if (existing?.isRepetition) {
+    // Google recurring instances are read-only in the app.
+    return existing;
+  }
   const row: EventRow = {
     id: input.id ?? newId(),
     title: input.title,
-    startsAt: input.startsAt ?? null,
-    endsAt: input.endsAt ?? null,
-    allDay: input.allDay ?? 0,
-    location: input.location ?? null,
-    memo: input.memo ?? null,
-    assigneeId: input.assigneeId ?? null,
-    sourceId: input.sourceId ?? null,
+    startsAt: input.startsAt !== undefined ? input.startsAt : existing?.startsAt ?? null,
+    endsAt: input.endsAt !== undefined ? input.endsAt : existing?.endsAt ?? null,
+    allDay: input.allDay !== undefined ? input.allDay : existing?.allDay ?? 0,
+    location: input.location !== undefined ? input.location : existing?.location ?? null,
+    memo: input.memo !== undefined ? input.memo : existing?.memo ?? null,
+    assigneeId: input.assigneeId !== undefined ? input.assigneeId : existing?.assigneeId ?? null,
+    sourceId: input.sourceId !== undefined ? input.sourceId : existing?.sourceId ?? null,
+    // Keep externalId intact even when googleSync is turned off (safety policy: never delete Google copy).
+    externalId: input.externalId !== undefined ? input.externalId : existing?.externalId ?? null,
+    externalEtag: input.externalEtag !== undefined ? input.externalEtag : existing?.externalEtag ?? null,
+    googleLastSyncedAt:
+      input.googleLastSyncedAt !== undefined ? input.googleLastSyncedAt : existing?.googleLastSyncedAt ?? null,
+    googleSync: input.googleSync !== undefined ? input.googleSync : existing?.googleSync ?? 1,
+    isRepetition: input.isRepetition !== undefined ? input.isRepetition : existing?.isRepetition ?? 0,
+    googleWarning: input.googleWarning !== undefined ? input.googleWarning : null,
     updatedAt: Date.now(),
     deleted: input.deleted ?? 0,
     rev: existing?.rev ?? 0,
   };
   await db.runAsync(
-    `INSERT INTO events(id,title,startsAt,endsAt,allDay,location,memo,assigneeId,sourceId,updatedAt,deleted,rev)
-     VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
-     ON CONFLICT(id) DO UPDATE SET title=excluded.title, startsAt=excluded.startsAt, endsAt=excluded.endsAt,
-       allDay=excluded.allDay, location=excluded.location, memo=excluded.memo, assigneeId=excluded.assigneeId,
-       sourceId=excluded.sourceId, updatedAt=excluded.updatedAt, deleted=excluded.deleted`,
-    [row.id, row.title, row.startsAt, row.endsAt, row.allDay, row.location, row.memo, row.assigneeId, row.sourceId, row.updatedAt, row.deleted, row.rev],
+    `INSERT INTO events(
+       id,title,startsAt,endsAt,allDay,location,memo,assigneeId,sourceId,
+       externalId,externalEtag,googleLastSyncedAt,googleSync,isRepetition,googleWarning,
+       updatedAt,deleted,rev
+     ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+     ON CONFLICT(id) DO UPDATE SET
+       title=excluded.title, startsAt=excluded.startsAt, endsAt=excluded.endsAt,
+       allDay=excluded.allDay, location=excluded.location, memo=excluded.memo,
+       assigneeId=excluded.assigneeId, sourceId=excluded.sourceId,
+       externalId=excluded.externalId, externalEtag=excluded.externalEtag,
+       googleLastSyncedAt=excluded.googleLastSyncedAt, googleSync=excluded.googleSync,
+       isRepetition=excluded.isRepetition, googleWarning=excluded.googleWarning,
+       updatedAt=excluded.updatedAt, deleted=excluded.deleted`,
+    [
+      row.id,
+      row.title,
+      row.startsAt,
+      row.endsAt,
+      row.allDay,
+      row.location,
+      row.memo,
+      row.assigneeId,
+      row.sourceId,
+      row.externalId,
+      row.externalEtag,
+      row.googleLastSyncedAt,
+      row.googleSync,
+      row.isRepetition,
+      row.googleWarning,
+      row.updatedAt,
+      row.deleted,
+      row.rev,
+    ],
   );
   await enqueue('events', row);
   return row;
@@ -327,7 +385,7 @@ export async function applyRemote(changes: { events: any[]; items: any[]; source
   for (const entity of ['events', 'items', 'sources'] as const) {
     for (const remote of changes[entity] ?? []) {
       const existing = await db.getFirstAsync<{ updatedAt: number }>(`SELECT updatedAt FROM ${entity} WHERE id = ?`, [remote.id]);
-      if (existing && Number(remote.updatedAt) <= Number(existing.updatedAt)) continue;
+      if (existing && Number(remote.updatedAt) < Number(existing.updatedAt)) continue;
       await upsertRemote(entity, remote);
       applied += 1;
     }
@@ -339,12 +397,37 @@ async function upsertRemote(entity: Entity, remote: any): Promise<void> {
   const db = await getDb();
   if (entity === 'events') {
     await db.runAsync(
-      `INSERT INTO events(id,title,startsAt,endsAt,allDay,location,memo,assigneeId,sourceId,updatedAt,deleted,rev)
-       VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+      `INSERT INTO events(
+         id,title,startsAt,endsAt,allDay,location,memo,assigneeId,sourceId,
+         externalId,externalEtag,googleLastSyncedAt,googleSync,isRepetition,googleWarning,
+         updatedAt,deleted,rev
+       ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
        ON CONFLICT(id) DO UPDATE SET title=excluded.title, startsAt=excluded.startsAt, endsAt=excluded.endsAt,
          allDay=excluded.allDay, location=excluded.location, memo=excluded.memo, assigneeId=excluded.assigneeId,
-         sourceId=excluded.sourceId, updatedAt=excluded.updatedAt, deleted=excluded.deleted, rev=excluded.rev`,
-      [remote.id, remote.title, iso(remote.startsAt), iso(remote.endsAt), remote.allDay, remote.location, remote.memo, remote.assigneeId, remote.sourceId, remote.updatedAt, remote.deleted, remote.rev],
+         sourceId=excluded.sourceId, externalId=excluded.externalId, externalEtag=excluded.externalEtag,
+         googleLastSyncedAt=excluded.googleLastSyncedAt, googleSync=excluded.googleSync,
+         isRepetition=excluded.isRepetition, googleWarning=excluded.googleWarning,
+         updatedAt=excluded.updatedAt, deleted=excluded.deleted, rev=excluded.rev`,
+      [
+        remote.id,
+        remote.title,
+        iso(remote.startsAt),
+        iso(remote.endsAt),
+        remote.allDay ?? 0,
+        remote.location ?? null,
+        remote.memo ?? null,
+        remote.assigneeId ?? null,
+        remote.sourceId ?? null,
+        remote.externalId ?? null,
+        remote.externalEtag ?? null,
+        remote.googleLastSyncedAt ?? null,
+        remote.googleSync ?? 1,
+        remote.isRepetition ?? 0,
+        remote.googleWarning ?? null,
+        remote.updatedAt,
+        remote.deleted,
+        remote.rev,
+      ],
     );
   } else if (entity === 'items') {
     await db.runAsync(

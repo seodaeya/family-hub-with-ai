@@ -1,7 +1,8 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { AppState, Platform } from 'react-native';
 import * as SecureStore from 'expo-secure-store';
-import { api, ApiError, normalizeUrl, setApiConfig, type Health } from './api';
+import { api, ApiError, getApiBaseUrl, normalizeUrl, setApiConfig, type Health } from './api';
+import { suggestedHubUrl } from './hub-url';
 import {
   applyRemote,
   clearOps,
@@ -15,7 +16,7 @@ import {
 } from './db';
 import { rescheduleNotifications } from './notify';
 import { cleanupOldPhotos } from './photo';
-import type { DeviceInfo } from './types';
+import type { DeviceInfo, GoogleHealth } from './types';
 
 const KEY_URL = 'hub.baseUrl';
 const KEY_TOKEN = 'hub.token';
@@ -29,14 +30,18 @@ type SessionValue = {
   device: DeviceInfo | null;
   family: { id: string; name: string } | null;
   health: Health | null;
+  googleHealth: GoogleHealth | null;
   lastSyncAt: number | null;
   outboxCount: number;
   syncing: boolean;
   syncError: string | null;
   connect: (input: { url: string; code: string; deviceName?: string }) => Promise<void>;
+  /** Same hub, new address (the Mac's LAN IP changed). Keeps the device token. */
+  changeServer: (url: string) => Promise<void>;
   disconnect: () => Promise<void>;
   refresh: () => Promise<void>;
   syncNow: () => Promise<void>;
+  syncGoogleNow: () => Promise<{ ok: boolean; pushed: number; pulled: number; conflicts: number; error?: string }>;
   refreshDevices: () => Promise<DeviceInfo[]>;
   approveDevice: (id: string) => Promise<void>;
   revokeDevice: (id: string) => Promise<void>;
@@ -61,6 +66,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
   const [device, setDevice] = useState<DeviceInfo | null>(null);
   const [family, setFamily] = useState<{ id: string; name: string } | null>(null);
   const [health, setHealth] = useState<Health | null>(null);
+  const [googleHealth, setGoogleHealth] = useState<GoogleHealth | null>(null);
   const [lastSyncAt, setLastSyncAt] = useState<number | null>(null);
   const [outboxCount, setOutboxCount] = useState(0);
   const [syncing, setSyncing] = useState(false);
@@ -113,7 +119,14 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
       }
 
       setStatus('ready');
-      api.health().then(setHealth).catch(() => setHealth(null));
+      api
+        .health()
+        .then((h) => {
+          setHealth(h);
+          if (h.google) setGoogleHealth(h.google);
+        })
+        .catch(() => setHealth(null));
+      api.googleHealth().then(setGoogleHealth).catch(() => {});
       const savedSync = await getMeta('lastSyncAt');
       setLastSyncAt(savedSync ? Number(savedSync) : null);
       setOutboxCount(await pendingCount());
@@ -179,6 +192,44 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
     await cleanupOldPhotos(photoSettings);
     const upcoming = await listEvents(new Date().toISOString());
     await rescheduleNotifications(upcoming);
+    api.googleHealth().then(setGoogleHealth).catch(() => {});
+  }, []);
+
+  /**
+   * Repairs a stale hub address without re-pairing.
+   *
+   * The Mac's LAN IP changes (new DHCP lease, Wi-Fi ↔ Ethernet). In development
+   * Metro is loaded from that same Mac, so its host is the current address and
+   * the saved device token still works against it.
+   */
+  const recoverAddress = useCallback(async (): Promise<boolean> => {
+    const previous = getApiBaseUrl();
+    if (!previous) return false;
+    const candidate = normalizeUrl(suggestedHubUrl());
+    if (!candidate || candidate === previous) return false;
+    setApiConfig({ baseUrl: candidate });
+    try {
+      const nextHealth = await api.health();
+      const me = await api.me();
+      if (me.device.status === 'revoked') {
+        setApiConfig({ baseUrl: previous });
+        return false;
+      }
+      await SecureStore.setItemAsync(KEY_URL, candidate);
+      await SecureStore.setItemAsync(KEY_DEVICE, JSON.stringify(me.device));
+      setBaseUrl(candidate);
+      setHealth(nextHealth);
+      setDevice(me.device);
+      setFamily(me.family);
+      setStatus(me.device.status === 'approved' ? 'ready' : 'pending');
+      setSyncError(null);
+      // Address changed: pull the full history from this hub once.
+      await setMeta('cursor', '0');
+      return true;
+    } catch {
+      setApiConfig({ baseUrl: previous });
+      return false;
+    }
   }, []);
 
   const syncNow = useCallback(async () => {
@@ -190,11 +241,21 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
     }
     syncingRef.current = true;
     setSyncing(true);
-    try {
+    const pass = async () => {
       do {
         syncQueuedRef.current = false;
         await runSync();
       } while (syncQueuedRef.current);
+    };
+    try {
+      try {
+        await pass();
+      } catch (error) {
+        // Only a transport failure can be fixed by trying another address.
+        if (!(error instanceof ApiError) || error.status !== 0) throw error;
+        if (!(await recoverAddress())) throw error;
+        await pass();
+      }
     } catch (error) {
       setSyncError((error as Error).message);
       setOutboxCount(await pendingCount());
@@ -202,7 +263,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
       syncingRef.current = false;
       setSyncing(false);
     }
-  }, [runSync]);
+  }, [recoverAddress, runSync]);
 
   const connect = useCallback(
     async (input: { url: string; code: string; deviceName?: string }) => {
@@ -226,6 +287,47 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
       if (result.device.status === 'approved') await syncNow();
     },
     [deviceName, syncNow],
+  );
+
+  const changeServer = useCallback(
+    async (input: string) => {
+      const next = normalizeUrl(input);
+      if (!next) throw new ApiError(0, 'invalid', '서버 주소를 입력해 주세요.');
+      const previous = getApiBaseUrl();
+      // Keep the token: a changed IP is still the same hub and the same device.
+      setApiConfig({ baseUrl: next });
+      let nextHealth: Health;
+      let me: Awaited<ReturnType<typeof api.me>>;
+      try {
+        nextHealth = await api.health();
+        me = await api.me();
+      } catch (error) {
+        setApiConfig({ baseUrl: previous });
+        throw error;
+      }
+
+      if (me.device.status === 'revoked') {
+        await signOutLocally();
+        return;
+      }
+
+      await SecureStore.setItemAsync(KEY_URL, next);
+      await SecureStore.setItemAsync(KEY_DEVICE, JSON.stringify(me.device));
+      setBaseUrl(next);
+      setHealth(nextHealth);
+      setDevice(me.device);
+      setFamily(me.family);
+      setStatus(me.device.status === 'approved' ? 'ready' : 'pending');
+      setSyncError(null);
+
+      // A different address may point at a different hub database, so pull the
+      // full history once instead of trusting the cursor from the old one.
+      if (previous !== next) await setMeta('cursor', '0');
+
+      api.googleHealth().then(setGoogleHealth).catch(() => {});
+      syncNow().catch(() => {});
+    },
+    [signOutLocally, syncNow],
   );
 
   const disconnect = useCallback(async () => {
@@ -268,6 +370,14 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
     return api.invite(10);
   }, []);
 
+  const syncGoogleNow = useCallback(async () => {
+    const res = await api.googleSync();
+    await syncNow();
+    const gHealth = await api.googleHealth().catch(() => null);
+    if (gHealth) setGoogleHealth(gHealth);
+    return res;
+  }, [syncNow]);
+
   // Poll while waiting for parental approval.
   useEffect(() => {
     if (status !== 'pending') return;
@@ -299,14 +409,17 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
       device,
       family,
       health,
+      googleHealth,
       lastSyncAt,
       outboxCount,
       syncing,
       syncError,
       connect,
+      changeServer,
       disconnect,
       refresh,
       syncNow,
+      syncGoogleNow,
       refreshDevices,
       approveDevice,
       revokeDevice,
@@ -318,14 +431,17 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
       device,
       family,
       health,
+      googleHealth,
       lastSyncAt,
       outboxCount,
       syncing,
       syncError,
       connect,
+      changeServer,
       disconnect,
       refresh,
       syncNow,
+      syncGoogleNow,
       refreshDevices,
       approveDevice,
       revokeDevice,

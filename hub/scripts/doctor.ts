@@ -2,6 +2,7 @@ import { access } from 'node:fs/promises';
 import { config, dbPath } from '../src/config.ts';
 import { ollamaHealth } from '../src/ai/ollama.ts';
 import { currentRev, listDevices, firstFamily } from '../src/db.ts';
+import { googleHealthCheck } from '../src/google.ts';
 
 const checks: Array<{ name: string; ok: boolean; detail: string }> = [];
 
@@ -38,6 +39,17 @@ if (family) {
     detail: `승인 ${approved.length}대 / 전체 ${devices.length}대`,
   });
 }
+
+const google = await googleHealthCheck(family?.id);
+checks.push({
+  name: '구글 캘린더',
+  ok: !google.configured || google.ok,
+  detail: !google.configured
+    ? '미설정 (선택 사항 · npm run google:setup)'
+    : google.ok
+      ? `연결됨 · ${google.calendarSummary} (${google.calendarIdMasked})`
+      : `오류 · ${google.error}`,
+});
 
 console.log('\nfamily-hub doctor\n');
 for (const check of checks) {

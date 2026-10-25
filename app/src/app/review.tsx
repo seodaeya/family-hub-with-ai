@@ -8,6 +8,7 @@ import { useSession } from '@/lib/session';
 import { peekDraft, takeDraft } from '@/lib/store';
 import type { EventRow, ListType } from '@/lib/types';
 import { addDays, formatDate, fromLocalInput, toLocalInput } from '@/lib/format';
+import { openGoogleCalendarTemplate } from '@/lib/google-calendar';
 import { DateField, formatYmdLabel } from '@/components/date-picker';
 import { EventLinkField, type EventOption } from '@/components/event-picker';
 import { Badge, Btn, Card, Chip, Empty, Field, Hint, Screen, SectionTitle } from '@/components/ui';
@@ -21,6 +22,7 @@ type DraftEvent = {
   time: string;
   allDay: boolean;
   location: string;
+  googleSync: boolean;
   confidence: number;
 };
 
@@ -32,6 +34,7 @@ type DraftItem = {
   qty: string;
   dueAt: string;
   linkedEventKey: string | null;
+  googleSync: boolean;
   confidence: number;
 };
 
@@ -39,7 +42,7 @@ const TYPE_LABEL: Record<ListType, string> = { shopping: '장보기', supply: '�
 
 export default function ReviewScreen() {
   const router = useRouter();
-  const { syncNow } = useSession();
+  const { syncNow, googleHealth } = useSession();
   const [draft] = useState(() => peekDraft());
   const [existingEvents, setExistingEvents] = useState<EventRow[]>([]);
   const [events, setEvents] = useState<DraftEvent[]>(() =>
@@ -51,6 +54,7 @@ export default function ReviewScreen() {
       time: event.allDay || !event.startsAt ? '09:00' : toLocalInput(event.startsAt).slice(11, 16),
       allDay: event.allDay,
       location: event.location ?? '',
+      googleSync: false,
       confidence: event.confidence,
     })),
   );
@@ -78,6 +82,7 @@ export default function ReviewScreen() {
         qty: item.qty ?? '',
         dueAt: dueYmd,
         linkedEventKey: defaultLink,
+        googleSync: false,
         confidence: item.confidence,
       };
     });
@@ -183,6 +188,7 @@ export default function ReviewScreen() {
           allDay: event.allDay ? 1 : 0,
           location: event.location.trim() || null,
           sourceId: source.id,
+          googleSync: event.googleSync ? 1 : 0,
         });
         draftEventIdMap.set(i, savedEvent.id);
       }
@@ -197,6 +203,7 @@ export default function ReviewScreen() {
             location: null,
             memo: item.qty.trim() ? `수량 ${item.qty.trim()}` : null,
             sourceId: source.id,
+            googleSync: item.googleSync ? 1 : 0,
           });
           continue;
         }
@@ -386,6 +393,32 @@ export default function ReviewScreen() {
                     onPress={() => updateEvent(index, { target: 'list' })}
                   />
                 </View>
+                <View style={styles.targetRow}>
+                  <Text style={styles.targetLabel}>구글 연동</Text>
+                  {event.target === 'event' && googleHealth?.ok ? (
+                    <Chip
+                      label={event.googleSync ? '✓ 허브 자동 동기화' : '허브 자동 동기화'}
+                      selected={event.googleSync}
+                      onPress={() => updateEvent(index, { googleSync: !event.googleSync })}
+                    />
+                  ) : null}
+                  <Chip
+                    label="🔍 구글 캘린더에 추가"
+                    onPress={() => {
+                      if (!event.date.trim()) {
+                        Alert.alert('날짜 필요', '구글 캘린더에 추가하려면 먼저 날짜를 선택해 주세요.');
+                        return;
+                      }
+                      openGoogleCalendarTemplate({
+                        title: event.title,
+                        date: event.date,
+                        time: event.time,
+                        allDay: event.allDay,
+                        location: event.location,
+                      });
+                    }}
+                  />
+                </View>
               </Card>
             ))}
           </View>
@@ -467,6 +500,35 @@ export default function ReviewScreen() {
                     onPress={() => updateItem(index, { target: 'event' })}
                   />
                 </View>
+                <View style={styles.targetRow}>
+                  <Text style={styles.targetLabel}>구글 연동</Text>
+                  {item.target === 'event' && googleHealth?.ok ? (
+                    <Chip
+                      label={item.googleSync ? '✓ 허브 자동 동기화' : '허브 자동 동기화'}
+                      selected={item.googleSync}
+                      onPress={() => updateItem(index, { googleSync: !item.googleSync })}
+                    />
+                  ) : null}
+                  <Chip
+                    label="🔍 구글 캘린더에 추가"
+                    onPress={() => {
+                      const fallbackDate =
+                        item.dueAt.trim() ||
+                        (item.linkedEventKey ? eventOptions.find((o) => o.id === item.linkedEventKey)?.dateYmd : '') ||
+                        '';
+                      if (!fallbackDate) {
+                        Alert.alert('날짜 필요', '구글 캘린더에 추가하려면 마감일이나 연결된 일정 날짜가 필요합니다.');
+                        return;
+                      }
+                      openGoogleCalendarTemplate({
+                        title: `[${TYPE_LABEL[item.listType]}] ${item.title}`,
+                        date: fallbackDate,
+                        allDay: true,
+                        memo: item.qty ? `수량: ${item.qty}` : undefined,
+                      });
+                    }}
+                  />
+                </View>
               </Card>
             ))}
           </View>
@@ -490,7 +552,9 @@ export default function ReviewScreen() {
         </Card>
       ) : null}
 
-      <Hint>저장 후에도 각 항목을 눌러 수정하거나 삭제할 수 있습니다.</Hint>
+      <Hint>
+        저장 후에도 각 항목을 눌러 수정하거나 삭제할 수 있습니다. &ldquo;🔍 구글 캘린더에 추가&rdquo;는 브라우저를 열어 구글 캘린더에 수동으로 저장합니다 (앱 저장과 별도).
+      </Hint>
     </Screen>
   );
 }

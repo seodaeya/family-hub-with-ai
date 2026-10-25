@@ -15,6 +15,7 @@ import { rescheduleNotifications } from '@/lib/notify';
 import { useSession } from '@/lib/session';
 import type { EventRow, ItemRow, ListType } from '@/lib/types';
 import { addDays, dateKey, formatDate, formatTime, fromLocalInput, startOfDay, toLocalInput } from '@/lib/format';
+import { openGoogleCalendarTemplate } from '@/lib/google-calendar';
 import { DateField } from '@/components/date-picker';
 import { Badge, Btn, Card, Chip, Empty, Field, Hint, Screen } from '@/components/ui';
 import { BottomBar } from '@/components/bottom-bar';
@@ -30,7 +31,7 @@ const TYPE_LABEL: Record<ListType, string> = {
 
 export default function ScheduleScreen() {
   const params = useLocalSearchParams<{ new?: string; eventId?: string }>();
-  const { syncNow } = useSession();
+  const { syncNow, googleHealth } = useSession();
   const [sections, setSections] = useState<Section[]>([]);
   const [items, setItems] = useState<ItemRow[]>([]);
   const [editing, setEditing] = useState<EventRow | 'new' | null>(params.new ? 'new' : null);
@@ -60,14 +61,18 @@ export default function ScheduleScreen() {
   );
 
   const save = async (draft: EventDraft) => {
-    const saved = await saveEvent({
-      id: draft.id,
-      title: draft.title.trim() || '새 일정',
-      startsAt: draft.allDay ? fromLocalInput(`${draft.date}T00:00`) : fromLocalInput(`${draft.date} ${draft.time}`),
-      allDay: draft.allDay ? 1 : 0,
-      location: draft.location || null,
-      memo: draft.memo || null,
-    });
+    const saved = draft.isRepetition && draft.id
+      ? (await listEvents()).find((ev) => ev.id === draft.id) ?? { id: draft.id }
+      : await saveEvent({
+          id: draft.id,
+          title: draft.title.trim() || '새 일정',
+          startsAt: draft.allDay ? fromLocalInput(`${draft.date}T00:00`) : fromLocalInput(`${draft.date} ${draft.time}`),
+          allDay: draft.allDay ? 1 : 0,
+          location: draft.location || null,
+          memo: draft.memo || null,
+          googleSync: draft.googleSync ? 1 : 0,
+          googleWarning: null,
+        });
 
     const initialLinkedIds = new Set(
       draft.id ? items.filter((it) => it.eventId === draft.id).map((it) => it.id) : [],
@@ -150,6 +155,12 @@ export default function ScheduleScreen() {
                 <View style={{ flex: 1, gap: 4 }}>
                   <View style={styles.titleRow}>
                     <Text style={[styles.eventTitle, { flex: 1 }]}>{item.title}</Text>
+                    {item.externalId ? (
+                      <Badge
+                        label={item.isRepetition ? 'G · 반복' : 'G'}
+                        tone={item.googleSync === 0 ? 'neutral' : 'primary'}
+                      />
+                    ) : null}
                     {linked.length > 0 ? (
                       <Badge
                         label={`준비물·할 일 ${doneCount}/${linked.length}`}
@@ -161,6 +172,9 @@ export default function ScheduleScreen() {
                     {item.allDay ? <Badge label="종일" tone="neutral" /> : <Text style={styles.time}>{formatTime(item.startsAt)}</Text>}
                     {item.location ? <Text style={styles.meta}>📍 {item.location}</Text> : null}
                   </View>
+                  {item.googleWarning ? (
+                    <Text style={styles.googleWarnText}>⚠ {item.googleWarning}</Text>
+                  ) : null}
                   {item.memo ? <Text style={styles.memo}>{item.memo}</Text> : null}
                   {linked.length > 0 ? (
                     <View style={styles.linkedList}>
@@ -199,6 +213,7 @@ export default function ScheduleScreen() {
         visible={Boolean(editing)}
         initial={draft}
         items={items}
+        googleConfigured={Boolean(googleHealth?.configured)}
         defaultDate={dateKey(addDays(new Date(), 1).toISOString())}
         onClose={() => setEditing(null)}
         onSave={save}
@@ -207,7 +222,7 @@ export default function ScheduleScreen() {
           await load();
           syncNow().catch(() => {});
         }}
-        onDelete={draft ? () => remove(draft.id) : undefined}
+        onDelete={draft && !draft.isRepetition ? () => remove(draft.id) : undefined}
       />
     </Screen>
   );
@@ -227,6 +242,8 @@ type EventDraft = {
   allDay: boolean;
   location: string;
   memo: string;
+  googleSync: boolean;
+  isRepetition?: boolean;
   linkedItemIds: string[];
   newItems: PendingNewItem[];
 };
@@ -235,6 +252,7 @@ function EventEditor({
   visible,
   initial,
   items,
+  googleConfigured,
   defaultDate,
   onClose,
   onSave,
@@ -244,12 +262,14 @@ function EventEditor({
   visible: boolean;
   initial: EventRow | null;
   items: ItemRow[];
+  googleConfigured: boolean;
   defaultDate: string;
   onClose: () => void;
   onSave: (draft: EventDraft) => void;
   onToggleItem: (item: ItemRow) => void;
   onDelete?: () => void;
 }) {
+  const isReadOnlyRepetition = Boolean(initial?.isRepetition);
   const [title, setTitle] = useState(initial?.title ?? '');
   const [date, setDate] = useState(
     initial?.startsAt ? toLocalInput(initial.startsAt).slice(0, 10) : defaultDate,
@@ -260,6 +280,9 @@ function EventEditor({
   const [allDay, setAllDay] = useState(Boolean(initial?.allDay));
   const [location, setLocation] = useState(initial?.location ?? '');
   const [memo, setMemo] = useState(initial?.memo ?? '');
+  const [googleSync, setGoogleSync] = useState<boolean>(
+    initial ? initial.googleSync !== 0 : googleConfigured,
+  );
   const [linkedItemIds, setLinkedItemIds] = useState<string[]>(() =>
     initial ? items.filter((it) => it.eventId === initial.id).map((it) => it.id) : [],
   );
@@ -305,12 +328,28 @@ function EventEditor({
           keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}
         >
+          {isReadOnlyRepetition ? (
+            <Card style={{ backgroundColor: colors.primarySoft, borderColor: colors.primary, gap: 4 }}>
+              <Text style={styles.repetitionTitle}>🔁 구글 반복 일정 (읽기 전용)</Text>
+              <Text style={styles.repetitionSub}>
+                구글 캘린더의 반복 규칙으로 생성된 일정입니다. 일정 정보는 구글 캘린더에서 수정해 주세요. (아래 준비물·할 일 연결은 자유롭게 사용할 수 있습니다.)
+              </Text>
+            </Card>
+          ) : null}
+
+          {initial?.googleWarning ? (
+            <Card style={{ backgroundColor: colors.warnSoft, borderColor: colors.warnSoft }}>
+              <Text style={styles.googleWarnText}>⚠ {initial.googleWarning}</Text>
+            </Card>
+          ) : null}
+
           <Field
             label="제목"
             value={title}
             onChangeText={setTitle}
             placeholder="예: 현장학습"
             autoFocus={!initial}
+            editable={!isReadOnlyRepetition}
             style={{ fontSize: 17 }}
           />
           <View style={{ flexDirection: 'row', gap: space.sm, alignItems: 'flex-start' }}>
@@ -318,30 +357,85 @@ function EventEditor({
               <DateField
                 label="날짜 (눌러서 달력 열기)"
                 value={date}
-                onChange={setDate}
+                onChange={(next) => {
+                  if (!isReadOnlyRepetition) setDate(next);
+                }}
                 placeholder="날짜 선택"
                 mode="inline"
               />
             </View>
             {!allDay ? (
               <View style={{ width: 104 }}>
-                <Field label="시간" value={time} onChangeText={setTime} placeholder="08:40" />
+                <Field
+                  label="시간"
+                  value={time}
+                  onChangeText={setTime}
+                  placeholder="08:40"
+                  editable={!isReadOnlyRepetition}
+                />
               </View>
             ) : null}
           </View>
           <View style={styles.switchRow}>
             <Text style={styles.switchLabel}>종일 일정</Text>
-            <Switch value={allDay} onValueChange={setAllDay} trackColor={{ true: colors.primary, false: colors.line }} />
+            <Switch
+              value={allDay}
+              onValueChange={setAllDay}
+              disabled={isReadOnlyRepetition}
+              trackColor={{ true: colors.primary, false: colors.line }}
+            />
           </View>
-          <Field label="장소" value={location} onChangeText={setLocation} placeholder="선택" />
+          <Field
+            label="장소"
+            value={location}
+            onChangeText={setLocation}
+            placeholder="선택"
+            editable={!isReadOnlyRepetition}
+          />
           <Field
             label="메모"
             value={memo}
             onChangeText={setMemo}
             placeholder="선택"
             multiline
+            editable={!isReadOnlyRepetition}
             style={{ minHeight: 68, textAlignVertical: 'top' }}
           />
+
+          <Card style={{ gap: space.sm }}>
+            <View style={styles.switchRow}>
+              <View style={{ flex: 1, gap: 2 }}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                  <Text style={styles.linkSectionTitle}>구글 캘린더 동기화 (`우리집 AI`)</Text>
+                  {initial?.externalId ? <Badge label="G 연동됨" tone="primary" /> : null}
+                </View>
+                <Text style={styles.emptyLinkText}>
+                  스위치를 꺼도 구글 캘린더에 이미 저장된 사본은 삭제되지 않고 유지됩니다.
+                </Text>
+              </View>
+              <Switch
+                value={googleSync}
+                onValueChange={setGoogleSync}
+                disabled={isReadOnlyRepetition}
+                trackColor={{ true: colors.primary, false: colors.line }}
+              />
+            </View>
+            <Btn
+              label="🔍 구글 캘린더에 수동 추가 (브라우저)"
+              small
+              variant="secondary"
+              onPress={() =>
+                openGoogleCalendarTemplate({
+                  title,
+                  date,
+                  time,
+                  allDay,
+                  location,
+                  memo,
+                })
+              }
+            />
+          </Card>
 
           <Card style={{ gap: space.sm, backgroundColor: colors.cardAlt }}>
             <View style={styles.linkSectionHeader}>
@@ -466,6 +560,8 @@ function EventEditor({
                 allDay,
                 location,
                 memo,
+                googleSync,
+                isRepetition: isReadOnlyRepetition,
                 linkedItemIds,
                 newItems: pending,
               });
@@ -516,6 +612,9 @@ const styles = StyleSheet.create({
   time: { ...font.small, color: colors.primary, fontWeight: '700' },
   meta: { ...font.small, color: colors.sub },
   memo: { ...font.small, color: colors.sub, marginTop: 4 },
+  googleWarnText: { ...font.tiny, color: colors.warn, marginTop: 2, fontWeight: '600' },
+  repetitionTitle: { ...font.small, color: colors.primary, fontWeight: '700' },
+  repetitionSub: { ...font.tiny, color: colors.ink, lineHeight: 17 },
   linkedList: {
     flexDirection: 'row',
     flexWrap: 'wrap',

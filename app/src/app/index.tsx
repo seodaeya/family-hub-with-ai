@@ -68,6 +68,9 @@ export default function HomeScreen() {
       {syncError ? (
         <Card style={{ backgroundColor: colors.warnSoft, borderColor: colors.warnSoft }}>
           <Text style={styles.syncError}>{syncError}</Text>
+          <Pressable hitSlop={8} onPress={() => router.push('/settings?changeServer=1')} accessibilityRole="link">
+            <Text style={styles.syncErrorLink}>서버 주소 변경</Text>
+          </Pressable>
         </Card>
       ) : null}
 
@@ -231,6 +234,12 @@ function EventCard({
           <View style={styles.eventTop}>
             <Text style={styles.eventDate}>{relativeDay(event.startsAt)}</Text>
             <Text style={styles.eventTime}>{event.allDay ? '종일' : formatTime(event.startsAt)}</Text>
+            {event.externalId ? (
+              <Badge
+                label={event.isRepetition ? 'G · 반복' : 'G'}
+                tone={event.googleSync === 0 ? 'neutral' : 'primary'}
+              />
+            ) : null}
             {linkedItems.length > 0 ? (
               <Badge
                 label={`준비물·할 일 ${doneCount}/${linkedItems.length}`}
@@ -279,6 +288,7 @@ const styles = StyleSheet.create({
   date: { ...font.small, color: colors.sub, marginTop: 2 },
   syncPill: { paddingTop: 4 },
   syncError: { ...font.small, color: colors.warn, lineHeight: 19 },
+  syncErrorLink: { ...font.small, color: colors.primary, fontWeight: '700', marginTop: 4 },
   quickRow: { flexDirection: 'row', gap: space.sm },
   quick: {
     flex: 1,

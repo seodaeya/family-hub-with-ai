@@ -10,7 +10,8 @@
     "dev": "node --watch src/server.ts",
     "invite": "node scripts/invite.ts",
     "bootstrap": "node scripts/bootstrap.ts",
-    "doctor": "node scripts/doctor.ts"
+    "doctor": "node scripts/doctor.ts",
+    "google:setup": "node scripts/google-setup.ts"
   },
   "dependencies": {
     "@fastify/cors": "^10.0.1",

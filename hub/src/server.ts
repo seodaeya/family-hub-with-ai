@@ -4,6 +4,7 @@ import { createReadStream } from 'node:fs';
 import { readdir, stat, unlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { networkInterfaces } from 'node:os';
 import { config, ensureDirs } from './config.ts';
 import {
   applyOp,
@@ -31,6 +32,12 @@ import { extract } from './ai/extract.ts';
 import { ollamaHealth } from './ai/ollama.ts';
 import { ocrHealthy } from './ai/ocr.ts';
 import { importUrl, UrlImportError } from './ai/url.ts';
+import {
+  googleHealthCheck,
+  loadGoogleCredentialsFromKeychain,
+  pullFromGoogleCalendar,
+  syncWithGoogleCalendar,
+} from './google.ts';
 
 ensureDirs();
 
@@ -84,16 +91,42 @@ function requireParent(device: Device, reply: any): boolean {
 // ---------------------------------------------------------------- health
 
 app.get('/v1/health', async () => {
-  const [ocr, ollama] = await Promise.all([ocrHealthy(), ollamaHealth()]);
+  const fam = firstFamily();
+  const [ocr, ollama, google] = await Promise.all([
+    ocrHealthy(),
+    ollamaHealth(),
+    googleHealthCheck(fam?.id),
+  ]);
   return {
     ok: true,
     version: '0.1.0',
     time: now(),
     ocr: { ok: ocr, engine: 'apple-vision' },
     ollama: { ok: ollama.ok, model: config.ollamaModel, altModel: config.altModel, models: ollama.models, error: ollama.error },
+    google,
     rev: currentRev(),
-    paired: Boolean(firstFamily()),
+    paired: Boolean(fam),
   };
+});
+
+app.get('/v1/google/health', async (request, reply) => {
+  const device = await authenticate(request, reply, { allowPending: true });
+  if (!device) return;
+  return googleHealthCheck(device.familyId);
+});
+
+app.post('/v1/google/pull', async (request, reply) => {
+  const device = await authenticate(request, reply);
+  if (!device) return;
+  const result = await pullFromGoogleCalendar(device.familyId);
+  return { ...result, serverTime: now() };
+});
+
+app.post('/v1/google/sync', async (request, reply) => {
+  const device = await authenticate(request, reply);
+  if (!device) return;
+  const result = await syncWithGoogleCalendar(device.familyId);
+  return { ...result, serverTime: now() };
 });
 
 // ---------------------------------------------------------------- pairing
@@ -234,6 +267,18 @@ app.post('/v1/sync', async (request, reply) => {
     );
   }
 
+  const hasEventOps = ops.some((op) => op?.entity === 'events');
+  const nowMs = now();
+  if (hasEventOps || nowMs - lastGoogleAutoSyncAt >= 45_000) {
+    const creds = await loadGoogleCredentialsFromKeychain();
+    if (creds) {
+      lastGoogleAutoSyncAt = nowMs;
+      await syncWithGoogleCalendar(device.familyId).catch((err) => {
+        request.log.warn({ err }, 'google auto-sync failed');
+      });
+    }
+  }
+
   const pulled = pullChanges(device.familyId, cursor);
   return {
     cursor: pulled.cursor,
@@ -243,6 +288,8 @@ app.post('/v1/sync', async (request, reply) => {
     serverTime: now(),
   };
 });
+
+let lastGoogleAutoSyncAt = 0;
 
 // --------------------------------------------------------------- extract
 
@@ -491,3 +538,17 @@ process.on('SIGTERM', close);
 
 await app.listen({ host: config.host, port: config.port });
 app.log.info(`family-hub hub listening on http://${config.host}:${config.port}`);
+for (const address of lanAddresses()) {
+  app.log.info(`  이 주소를 폰의 "설정 → 서버 주소 변경"에 입력하세요: http://${address}:${config.port}`);
+}
+
+/** Non-loopback IPv4 addresses, so a changed LAN IP is visible in the log. */
+function lanAddresses(): string[] {
+  const out: string[] = [];
+  for (const list of Object.values(networkInterfaces())) {
+    for (const net of list ?? []) {
+      if (net.family === 'IPv4' && !net.internal) out.push(net.address);
+    }
+  }
+  return out;
+}

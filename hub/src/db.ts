@@ -56,6 +56,12 @@ CREATE TABLE IF NOT EXISTS events (
   memo TEXT,
   assigneeId TEXT,
   sourceId TEXT,
+  externalId TEXT,
+  externalEtag TEXT,
+  googleLastSyncedAt INTEGER,
+  googleSync INTEGER DEFAULT 1,
+  isRepetition INTEGER DEFAULT 0,
+  googleWarning TEXT,
   updatedAt INTEGER NOT NULL,
   deleted INTEGER DEFAULT 0,
   rev INTEGER NOT NULL DEFAULT 0
@@ -115,6 +121,20 @@ if (!itemColumns.some((col) => col.name === 'eventId')) {
   db.exec('ALTER TABLE items ADD COLUMN eventId TEXT;');
 }
 db.exec('CREATE INDEX IF NOT EXISTS idx_items_event ON items(familyId, eventId);');
+
+const eventColumns = db.prepare('PRAGMA table_info(events)').all() as Array<{ name: string }>;
+const ensureEventCol = (name: string, ddl: string) => {
+  if (!eventColumns.some((col) => col.name === name)) {
+    db.exec(`ALTER TABLE events ADD COLUMN ${name} ${ddl};`);
+  }
+};
+ensureEventCol('externalId', 'TEXT');
+ensureEventCol('externalEtag', 'TEXT');
+ensureEventCol('googleLastSyncedAt', 'INTEGER');
+ensureEventCol('googleSync', 'INTEGER DEFAULT 1');
+ensureEventCol('isRepetition', 'INTEGER DEFAULT 0');
+ensureEventCol('googleWarning', 'TEXT');
+db.exec('CREATE INDEX IF NOT EXISTS idx_events_external ON events(familyId, externalId);');
 
 export function now(): number {
   return Date.now();
@@ -356,12 +376,27 @@ export function consumePairingCode(code: string, deviceId: string): void {
 export type Entity = 'events' | 'items' | 'sources';
 
 const FIELDS: Record<Entity, string[]> = {
-  events: ['title', 'startsAt', 'endsAt', 'allDay', 'location', 'memo', 'assigneeId', 'sourceId'],
+  events: [
+    'title',
+    'startsAt',
+    'endsAt',
+    'allDay',
+    'location',
+    'memo',
+    'assigneeId',
+    'sourceId',
+    'externalId',
+    'externalEtag',
+    'googleLastSyncedAt',
+    'googleSync',
+    'isRepetition',
+    'googleWarning',
+  ],
   items: ['listType', 'title', 'qty', 'dueAt', 'assigneeId', 'done', 'sourceId', 'eventId'],
   sources: ['kind', 'text', 'photoRef', 'createdAt'],
 };
 
-const NUMERIC = new Set(['allDay', 'done', 'createdAt']);
+const NUMERIC = new Set(['allDay', 'done', 'createdAt', 'googleLastSyncedAt', 'googleSync', 'isRepetition']);
 
 export type SyncOp = {
   opId: string;
@@ -379,6 +414,9 @@ export function applyOp(familyId: string, op: SyncOp): { applied: boolean; rev: 
     | undefined;
 
   if (existing) {
+    if (entity === 'events' && Number(existing.isRepetition) === 1) {
+      return { applied: false, rev: Number(existing.rev) };
+    }
     if (Number(op.row.updatedAt) <= Number(existing.updatedAt)) {
       return { applied: false, rev: Number(existing.rev) };
     }
@@ -434,4 +472,148 @@ export function pullChanges(familyId: string, cursor: number, limit = 500): { ch
     for (const row of rows) maxRev = Math.max(maxRev, Number(row.rev));
   }
   return { changes, cursor: maxRev };
+}
+
+// ------------------------------------------------------------ google calendar
+
+export type HubEventRow = {
+  id: string;
+  familyId: string;
+  title: string;
+  startsAt: string | null;
+  endsAt: string | null;
+  allDay: number;
+  location: string | null;
+  memo: string | null;
+  assigneeId: string | null;
+  sourceId: string | null;
+  externalId: string | null;
+  externalEtag: string | null;
+  googleLastSyncedAt: number | null;
+  googleSync: number;
+  isRepetition: number;
+  googleWarning: string | null;
+  updatedAt: number;
+  deleted: number;
+  rev: number;
+};
+
+export function getEventById(id: string): HubEventRow | null {
+  return (db.prepare('SELECT * FROM events WHERE id = ?').get(id) as HubEventRow | undefined) ?? null;
+}
+
+export function getEventByExternalId(familyId: string, externalId: string): HubEventRow | null {
+  return (
+    (db
+      .prepare('SELECT * FROM events WHERE familyId = ? AND externalId = ? LIMIT 1')
+      .get(familyId, externalId) as HubEventRow | undefined) ?? null
+  );
+}
+
+export function listEventsForGooglePush(familyId: string): HubEventRow[] {
+  return db
+    .prepare(
+      `SELECT * FROM events
+       WHERE familyId = ?
+         AND deleted = 0
+         AND COALESCE(isRepetition, 0) = 0
+         AND COALESCE(googleSync, 1) = 1
+         AND (externalId IS NULL OR updatedAt > COALESCE(googleLastSyncedAt, 0))
+       ORDER BY updatedAt ASC`,
+    )
+    .all(familyId) as HubEventRow[];
+}
+
+export function upsertEventFromGoogle(
+  familyId: string,
+  input: {
+    id?: string;
+    title: string;
+    startsAt: string | null;
+    endsAt: string | null;
+    allDay: number;
+    location: string | null;
+    memo: string | null;
+    externalId: string;
+    externalEtag: string | null;
+    googleLastSyncedAt: number;
+    isRepetition: number;
+    googleWarning: string | null;
+    updatedAt: number;
+    deleted: number;
+  },
+): HubEventRow {
+  const existing = input.id ? getEventById(input.id) : getEventByExternalId(familyId, input.externalId);
+  const rev = nextRev();
+  const id = existing?.id ?? input.id ?? newId();
+  if (existing) {
+    db.prepare(
+      `UPDATE events
+       SET title = ?, startsAt = ?, endsAt = ?, allDay = ?, location = ?, memo = ?,
+           externalId = ?, externalEtag = ?, googleLastSyncedAt = ?, googleSync = 1,
+           isRepetition = ?, googleWarning = ?, updatedAt = ?, deleted = ?, rev = ?
+       WHERE id = ?`,
+    ).run(
+      input.title,
+      input.startsAt,
+      input.endsAt,
+      input.allDay,
+      input.location,
+      input.memo,
+      input.externalId,
+      input.externalEtag,
+      input.googleLastSyncedAt,
+      input.isRepetition,
+      input.googleWarning,
+      input.updatedAt,
+      input.deleted,
+      rev,
+      id,
+    );
+  } else {
+    db.prepare(
+      `INSERT INTO events (
+         id, familyId, title, startsAt, endsAt, allDay, location, memo,
+         externalId, externalEtag, googleLastSyncedAt, googleSync,
+         isRepetition, googleWarning, updatedAt, deleted, rev
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?)`,
+    ).run(
+      id,
+      familyId,
+      input.title,
+      input.startsAt,
+      input.endsAt,
+      input.allDay,
+      input.location,
+      input.memo,
+      input.externalId,
+      input.externalEtag,
+      input.googleLastSyncedAt,
+      input.isRepetition,
+      input.googleWarning,
+      input.updatedAt,
+      input.deleted,
+      rev,
+    );
+  }
+  return getEventById(id)!;
+}
+
+export function updateEventGoogleMeta(
+  id: string,
+  patch: {
+    externalId: string;
+    externalEtag: string | null;
+    googleLastSyncedAt: number;
+    googleWarning?: string | null;
+  },
+): void {
+  const existing = getEventById(id);
+  const nextUpdated = Math.max(now(), (existing?.updatedAt ?? 0) + 1);
+  const rev = nextRev();
+  db.prepare(
+    `UPDATE events
+     SET externalId = ?, externalEtag = ?, googleLastSyncedAt = ?, googleWarning = ?, updatedAt = ?, rev = ?
+     WHERE id = ?`,
+  ).run(patch.externalId, patch.externalEtag, patch.googleLastSyncedAt, patch.googleWarning ?? null, nextUpdated, rev, id);
 }

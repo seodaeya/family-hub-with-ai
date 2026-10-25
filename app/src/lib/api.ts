@@ -1,4 +1,4 @@
-import type { DeviceInfo, ExtractResult } from './types';
+import type { DeviceInfo, ExtractResult, GoogleHealth } from './types';
 
 export class ApiError extends Error {
   status: number;
@@ -16,6 +16,11 @@ let token: string | null = null;
 export function setApiConfig(next: { baseUrl?: string | null; token?: string | null }): void {
   if (next.baseUrl !== undefined) baseUrl = next.baseUrl;
   if (next.token !== undefined) token = next.token;
+}
+
+/** The address currently in use, for code that must not trust a stale render. */
+export function getApiBaseUrl(): string | null {
+  return baseUrl;
 }
 
 export function normalizeUrl(input: string): string {
@@ -71,11 +76,29 @@ export type Health = {
   version: string;
   ocr: { ok: boolean; engine: string };
   ollama: { ok: boolean; model: string; altModel?: string; models: string[]; error?: string };
+  google?: GoogleHealth;
   paired: boolean;
 };
 
 export const api = {
-  health: () => request<Health>('/v1/health', { auth: false, timeoutMs: 6000 }),  pair: (input: { code: string; name: string; platform: string }) =>
+  health: () => request<Health>('/v1/health', { auth: false, timeoutMs: 6000 }),
+  googleHealth: () => request<GoogleHealth>('/v1/google/health', { timeoutMs: 8000 }),
+  googlePull: () =>
+    request<{ ok: boolean; pulled: number; conflicts: number; fullSync: boolean; error?: string; serverTime: number }>(
+      '/v1/google/pull',
+      { body: {}, timeoutMs: 25_000 },
+    ),
+  googleSync: () =>
+    request<{
+      configured: boolean;
+      ok: boolean;
+      pushed: number;
+      pulled: number;
+      conflicts: number;
+      error?: string;
+      serverTime: number;
+    }>('/v1/google/sync', { body: {}, timeoutMs: 30_000 }),
+  pair: (input: { code: string; name: string; platform: string }) =>
     request<{ token: string; device: DeviceInfo; family: { id: string; name: string } }>('/v1/pair', {
       body: input,
       auth: false,

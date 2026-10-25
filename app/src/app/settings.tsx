@@ -1,6 +1,6 @@
 import { useCallback, useState } from 'react';
 import { Alert, Pressable, Share, StyleSheet, Text, View } from 'react-native';
-import { useFocusEffect, useRouter } from 'expo-router';
+import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import * as FileSystem from 'expo-file-system/legacy';
 import { clearEverything, useSession } from '@/lib/session';
 import { getAiSettings, getPhotoSettings, listEvents, listItems, saveAiSettings } from '@/lib/db';
@@ -10,15 +10,33 @@ import { photoStorageSummary, type PhotoStorage } from '@/lib/photo';
 import { notificationsAvailable } from '@/lib/notify';
 import { Badge, Btn, Card, Divider, Hint, Row, Screen, ScreenHeader, SectionTitle } from '@/components/ui';
 import { BottomBar } from '@/components/bottom-bar';
+import { ServerAddressSheet } from '@/components/server-address';
 import { colors, font, space } from '@/theme';
 
 export default function SettingsScreen() {
   const router = useRouter();
-  const { family, device, baseUrl, health, syncing, syncNow, outboxCount, lastSyncAt, disconnect, syncError } = useSession();
+  const params = useLocalSearchParams<{ changeServer?: string }>();
+  const {
+    family,
+    device,
+    baseUrl,
+    health,
+    googleHealth,
+    syncing,
+    syncNow,
+    syncGoogleNow,
+    outboxCount,
+    lastSyncAt,
+    disconnect,
+    syncError,
+  } = useSession();
   const [photo, setPhoto] = useState<PhotoSettings | null>(null);
   const [ai, setAi] = useState<AiSettings | null>(null);
   const [notifOk, setNotifOk] = useState<boolean | null>(null);
   const [photoStore, setPhotoStore] = useState<PhotoStorage | null>(null);
+  const [googleBusy, setGoogleBusy] = useState(false);
+  // Opened directly by the home screen's offline banner.
+  const [serverOpen, setServerOpen] = useState(params.changeServer === '1');
 
   useFocusEffect(
     useCallback(() => {
@@ -116,6 +134,72 @@ export default function SettingsScreen() {
         />
       </Card>
 
+      <SectionTitle title="구글 캘린더" />
+      <Card style={{ gap: space.sm }}>
+        <Row style={{ justifyContent: 'space-between' }}>
+          <Text style={styles.cardTitle}>
+            {googleHealth?.calendarSummary ? `캘린더 · ${googleHealth.calendarSummary}` : '우리집 AI 전용 캘린더'}
+          </Text>
+          <Badge
+            label={
+              !googleHealth?.configured
+                ? '미설정'
+                : googleHealth.ok
+                  ? '연결됨'
+                  : '연결 오류'
+            }
+            tone={!googleHealth?.configured ? 'neutral' : googleHealth.ok ? 'good' : 'danger'}
+          />
+        </Row>
+        {googleHealth?.configured ? (
+          <>
+            {googleHealth.calendarIdMasked ? (
+              <Row style={{ justifyContent: 'space-between' }}>
+                <Text style={styles.label}>캘린더 ID</Text>
+                <Text style={styles.value}>{googleHealth.calendarIdMasked}</Text>
+              </Row>
+            ) : null}
+            <Row style={{ justifyContent: 'space-between' }}>
+              <Text style={styles.label}>구글 동기화</Text>
+              <Text style={styles.value}>{formatRelativeTime(googleHealth.lastSyncAt ?? null)}</Text>
+            </Row>
+            {googleHealth.error ? (
+              <Text style={{ ...font.tiny, color: colors.danger }}>{googleHealth.error}</Text>
+            ) : null}
+            <Btn
+              label={googleBusy ? '구글 동기화 중…' : '구글 캘린더 지금 동기화'}
+              small
+              variant="secondary"
+              loading={googleBusy}
+              onPress={async () => {
+                setGoogleBusy(true);
+                try {
+                  const res = await syncGoogleNow();
+                  if (!res.ok) {
+                    Alert.alert('구글 동기화 오류', res.error ?? '구글 캘린더와 동기화하지 못했습니다.');
+                  } else {
+                    Alert.alert(
+                      '구글 동기화 완료',
+                      `업로드 ${res.pushed}건 · 가져오기 ${res.pulled}건${res.conflicts ? ` · 충돌 해결 ${res.conflicts}건` : ''}`,
+                    );
+                  }
+                } catch (err) {
+                  Alert.alert('동기화 실패', (err as Error).message);
+                } finally {
+                  setGoogleBusy(false);
+                }
+              }}
+            />
+          </>
+        ) : (
+          <Hint>
+            맥 허브의 키체인에 서비스 계정 키를 등록하면 전용 구글 캘린더와 양방향 동기화됩니다.{'\n'}
+            맥 터미널: cd hub && npm run google:setup -- --key service-account.json --calendar &lt;캘린더ID&gt;{'\n'}
+            (키체인 등록 전에도 검토·일정 화면의 &ldquo;🔍 구글 캘린더에 추가&rdquo; 버튼으로 수동 추가할 수 있습니다.)
+          </Hint>
+        )}
+      </Card>
+
       <SectionTitle title="AI" />
       <Card>
         <Text style={styles.cardTitle}>정리 속도</Text>
@@ -171,6 +255,12 @@ export default function SettingsScreen() {
 
       <SectionTitle title="연결" />
       <Card style={{ gap: space.md }}>
+        <PressableRow
+          label="서버 주소 변경"
+          hint={baseUrl ? `현재 · ${baseUrl}` : '맥의 IP가 바뀌었을 때'}
+          onPress={() => setServerOpen(true)}
+        />
+        <Divider />
         <Btn label="연결 해제" variant="danger" onPress={disconnectDevice} />
       </Card>
 
@@ -178,6 +268,8 @@ export default function SettingsScreen() {
         우리집 AI v0.1 · 로컬 우선{'\n'}
         사진과 글은 집 안의 맥에서만 처리됩니다.
       </Text>
+
+      {serverOpen ? <ServerAddressSheet onClose={() => setServerOpen(false)} /> : null}
     </Screen>
   );
 }
