@@ -17,6 +17,20 @@ import {
 
 const execFileAsync = promisify(execFile);
 
+/**
+ * Least privilege for the service account.
+ *
+ * `auth/calendar` would also allow sharing, renaming, and permanently deleting
+ * every calendar the account can access. The hub only lists/creates/updates
+ * events and reads one calendar's summary, so request just those two scopes.
+ * The real boundary is still the calendar ACL: only the dedicated calendar is
+ * shared with this service account.
+ */
+export const GOOGLE_SCOPES = [
+  'https://www.googleapis.com/auth/calendar.events',
+  'https://www.googleapis.com/auth/calendar.calendars.readonly',
+].join(' ');
+
 export const KEYCHAIN_SERVICE = 'family-hub-google';
 export const KEYCHAIN_ACCOUNT = 'service-account';
 
@@ -122,7 +136,7 @@ async function getAccessToken(creds: GoogleKeychainCredentials): Promise<string>
   const payload = Buffer.from(
     JSON.stringify({
       iss: creds.clientEmail,
-      scope: 'https://www.googleapis.com/auth/calendar',
+      scope: GOOGLE_SCOPES,
       aud: tokenUri,
       iat,
       exp,
