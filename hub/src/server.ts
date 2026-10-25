@@ -1,7 +1,7 @@
 import Fastify from 'fastify';
 import cors from '@fastify/cors';
 import { createReadStream } from 'node:fs';
-import { readdir, stat, unlink, writeFile } from 'node:fs/promises';
+import { stat, unlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { networkInterfaces } from 'node:os';
@@ -18,8 +18,10 @@ import {
   getDeviceByToken,
   getPairingCode,
   listDevices,
+  listPhotoIdsForFamily,
   listPhotoSources,
   now,
+  photoBelongsToFamily,
   purgeExpiredPhotos,
   savePhotoMeta,
   pullChanges,
@@ -46,7 +48,31 @@ const app = Fastify({
   bodyLimit: config.bodyLimit,
 });
 
-await app.register(cors, { origin: true });
+/**
+ * Native apps do not send an Origin header and are unaffected. Web builds are
+ * only allowed from loopback/LAN development origins: an arbitrary public site
+ * must not be able to read hub responses (including the health probe).
+ */
+function isAllowedWebOrigin(origin: string): boolean {
+  try {
+    const url = new URL(origin);
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') return false;
+    const host = url.hostname.replace(/^\[|\]$/g, '');
+    if (host === 'localhost' || host === '127.0.0.1' || host === '::1') return true;
+    if (/^10\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host)) return true;
+    if (/^192\.168\.\d{1,3}\.\d{1,3}$/.test(host)) return true;
+    if (/^172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}$/.test(host)) return true;
+    // Tailscale / CGNAT range, used when the hub is reached over Tailscale.
+    if (/^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.\d{1,3}\.\d{1,3}$/.test(host)) return true;
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+await app.register(cors, {
+  origin: (origin, cb) => cb(null, !origin || isAllowedWebOrigin(origin)),
+});
 
 type Authed = { device: Device; token: string };
 
@@ -92,11 +118,17 @@ function requireParent(device: Device, reply: any): boolean {
 
 app.get('/v1/health', async () => {
   const fam = firstFamily();
-  const [ocr, ollama, google] = await Promise.all([
+  const [ocr, ollama, rawGoogle] = await Promise.all([
     ocrHealthy(),
     ollamaHealth(),
     googleHealthCheck(fam?.id),
   ]);
+  // /v1/health is unauthenticated. Keep enough for the setup screen to know
+  // whether Google is configured, but never expose the service-account email
+  // or the (partially masked) calendar id to anyone on the LAN.
+  const google = { ...rawGoogle };
+  delete google.serviceAccountEmail;
+  delete google.calendarIdMasked;
   return {
     ok: true,
     version: '0.1.0',
@@ -112,7 +144,9 @@ app.get('/v1/health', async () => {
 app.get('/v1/google/health', async (request, reply) => {
   const device = await authenticate(request, reply, { allowPending: true });
   if (!device) return;
-  return googleHealthCheck(device.familyId);
+  const health = await googleHealthCheck(device.familyId);
+  delete health.serviceAccountEmail;
+  return health;
 });
 
 app.post('/v1/google/pull', async (request, reply) => {
@@ -222,7 +256,9 @@ app.post('/v1/invite', async (request, reply) => {
   const body = (request.body ?? {}) as { ttlMinutes?: number };
   const ttlMs = Math.min(60, Math.max(1, Number(body.ttlMinutes ?? 10))) * 60_000;
   const code = createPairingCode({ familyId: device.familyId, kind: 'invite', createdBy: device.id, ttlMs });
-  audit(device.familyId, device.id, 'invite.create', { code: code.code });
+  // Do not persist the one-time code in the audit log; the code is shown once
+  // to the parent device and is enough to enroll a new device while valid.
+  audit(device.familyId, device.id, 'invite.create', { expiresAt: code.expiresAt, ttlMs });
   return { code: code.code, expiresAt: code.expiresAt };
 });
 
@@ -396,7 +432,9 @@ app.get('/v1/photos', async (request, reply) => {
   const previews = new Map(
     listPhotoSources(device.familyId).map((row) => [row.photoRef, row.text] as const),
   );
-  const names = await readdir(dir).catch(() => [] as string[]);
+  // Only files owned by this family. A raw readdir would leak the existence
+  // (and ids) of photos belonging to another family in the same hub DB.
+  const names = new Set(listPhotoIdsForFamily(device.familyId));
   const photos = [];
   for (const id of names) {
     if (!/^[a-f0-9-]+\.(jpg|jpeg|png|webp|heic)$/i.test(id)) continue;
@@ -410,7 +448,7 @@ app.get('/v1/photos', async (request, reply) => {
     });
   }
   photos.sort((a, b) => b.createdAt - a.createdAt);
-  return { photos };
+  return reply.header('cache-control', 'private, no-store').send({ photos });
 });
 
 app.get('/v1/photos/:id', async (request, reply) => {
@@ -419,6 +457,11 @@ app.get('/v1/photos/:id', async (request, reply) => {
   const { id } = request.params as { id: string };
   if (!/^[a-f0-9-]+\.(jpg|jpeg|png|webp|heic)$/i.test(id)) {
     return reply.code(400).send({ error: 'bad_request', message: '잘못된 사진 경로입니다.' });
+  }
+  // The id is unguessable, but the list endpoint (and DB) may contain photos
+  // from another family. Check ownership on every read, not just the listing.
+  if (!photoBelongsToFamily(id, device.familyId)) {
+    return reply.code(404).send({ error: 'not_found', message: '사진을 찾을 수 없습니다.' });
   }
   const path = join(config.dataDir, 'photos', id);
   return reply

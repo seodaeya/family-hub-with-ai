@@ -11,6 +11,7 @@
  * model exactly like OCR output.
  */
 import { spawn } from 'node:child_process';
+import { lookup } from 'node:dns/promises';
 import { access, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -76,12 +77,25 @@ export async function importUrl(raw: string): Promise<UrlImport> {
   const started = Date.now();
   const url = normalizeImportUrl(raw);
 
-  const direct = await tryFetch(url).catch(() => null);
+  let direct: { title: string; text: string; finalUrl: string } | null = null;
+  try {
+    direct = await tryFetch(url);
+  } catch (error) {
+    // A blocked internal address must not silently fall through to Chrome,
+    // which would follow the same redirect.
+    if (error instanceof UrlImportError) throw error;
+    // Network/HTTP/content-type failures may still work in the JS renderer.
+  }
   if (direct && direct.text.length >= MIN_USEFUL_TEXT) {
     return { url: url.toString(), title: direct.title, text: direct.text, via: 'fetch', ms: Date.now() - started };
   }
 
-  const rendered = await tryChrome(url).catch((error: Error) => {
+  // Start Chrome at the final, already-validated URL when the redirect chain
+  // is known. This keeps a public URL from bouncing the browser into the LAN.
+  const chromeTarget = direct?.finalUrl ? new URL(direct.finalUrl) : url;
+  await assertPublicHost(chromeTarget);
+
+  const rendered = await tryChrome(chromeTarget).catch((error: Error) => {
     // Prefer whatever the plain fetch found over a hard failure.
     if (direct && direct.text.length > 0) return null;
     throw new UrlImportError(
@@ -106,25 +120,78 @@ export async function importUrl(raw: string): Promise<UrlImport> {
   };
 }
 
-async function tryFetch(url: URL): Promise<{ title: string; text: string }> {
-  const res = await fetch(url, {
-    redirect: 'follow',
-    headers: {
-      'user-agent': USER_AGENT,
-      'accept-language': 'ko-KR,ko;q=0.9,en;q=0.6',
-      accept: 'text/html,application/xhtml+xml',
-    },
-    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-  });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+const REDIRECT_STATUS = new Set([301, 302, 303, 307, 308]);
+const MAX_REDIRECTS = 5;
 
-  const type = res.headers.get('content-type') ?? '';
-  if (!/text\/html|application\/xhtml|text\/plain/i.test(type)) {
-    throw new Error(`지원하지 않는 형식: ${type || '알 수 없음'}`);
+/**
+ * Fetch with manual redirects so every hop is re-checked against the private
+ * host rules. `redirect: 'follow'` would let a public URL bounce straight to
+ * 127.0.0.1 / 192.168.x.x after the initial validation.
+ */
+async function tryFetch(url: URL): Promise<{ title: string; text: string; finalUrl: string }> {
+  let current = url;
+
+  for (let hop = 0; hop <= MAX_REDIRECTS; hop += 1) {
+    await assertPublicHost(current);
+
+    const res = await fetch(current, {
+      redirect: 'manual',
+      headers: {
+        'user-agent': USER_AGENT,
+        'accept-language': 'ko-KR,ko;q=0.9,en;q=0.6',
+        accept: 'text/html,application/xhtml+xml',
+      },
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+    });
+
+    if (REDIRECT_STATUS.has(res.status)) {
+      const location = res.headers.get('location');
+      await res.body?.cancel().catch(() => {});
+      if (!location) throw new UrlImportError('링크가 잘못된 주소로 이동합니다.');
+      current = normalizeImportUrl(new URL(location, current).toString());
+      continue;
+    }
+
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+    const type = res.headers.get('content-type') ?? '';
+    if (!/text\/html|application\/xhtml|text\/plain/i.test(type)) {
+      throw new Error(`지원하지 않는 형식: ${type || '알 수 없음'}`);
+    }
+
+    const html = (await res.text()).slice(0, MAX_HTML_BYTES);
+    return { title: extractTitle(html), text: htmlToText(html), finalUrl: current.toString() };
   }
 
-  const html = (await res.text()).slice(0, MAX_HTML_BYTES);
-  return { title: extractTitle(html), text: htmlToText(html) };
+  throw new UrlImportError('링크 이동이 너무 많습니다.');
+}
+
+/**
+ * Resolves a hostname and rejects it when any address points into the LAN.
+ * The literal check in normalizeImportUrl is not enough: a public-looking
+ * domain can resolve to 127.0.0.1 (DNS rebinding is still a residual risk
+ * between this lookup and the actual request).
+ */
+async function assertPublicHost(url: URL): Promise<void> {
+  if (isPrivateHost(url.hostname)) {
+    throw new UrlImportError('집 안의 주소(내부 IP)는 가져올 수 없습니다.');
+  }
+  if (isIpLiteral(url.hostname)) return;
+
+  let addresses: Array<{ address: string }>;
+  try {
+    addresses = await lookup(url.hostname, { all: true, verbatim: true });
+  } catch {
+    throw new UrlImportError('링크의 주소를 확인하지 못했습니다. 공개 링크인지 확인해 주세요.');
+  }
+  if (!addresses.length) {
+    throw new UrlImportError('링크의 주소를 확인하지 못했습니다. 공개 링크인지 확인해 주세요.');
+  }
+  for (const { address } of addresses) {
+    if (isPrivateHost(address)) {
+      throw new UrlImportError('집 안의 주소(내부 IP)는 가져올 수 없습니다.');
+    }
+  }
 }
 
 async function tryChrome(url: URL): Promise<{ title: string; text: string }> {
@@ -250,10 +317,35 @@ function decodeEntities(input: string): string {
     .replace(/&#x([0-9a-f]+);/gi, (_, code) => String.fromCodePoint(parseInt(code, 16)));
 }
 
-function isPrivateHost(hostname: string): boolean {
-  const host = hostname.toLowerCase().replace(/^\[|\]$/g, '');
-  if (host === 'localhost' || host.endsWith('.local') || host === 'metadata.google.internal') return true;
-  if (host === '::1') return true;
+export function isPrivateHost(hostname: string): boolean {
+  // URL keeps IPv6 brackets and may leave a trailing dot on a hostname.
+  const host = hostname.toLowerCase().replace(/^\[|\]$/g, '').replace(/\.$/, '');
+
+  if (
+    host === 'localhost' ||
+    host.endsWith('.localhost') ||
+    host.endsWith('.local') ||
+    host.endsWith('.internal') ||
+    host.endsWith('.home.arpa') ||
+    host === 'metadata.google.internal'
+  ) {
+    return true;
+  }
+
+  if (host.includes(':')) {
+    if (host === '::1' || host === '::') return true;
+    if (/^f[cd][0-9a-f]{2}:/.test(host)) return true; // fc00::/7 unique local
+    if (/^fe[89ab][0-9a-f]:/.test(host)) return true; // fe80::/10 link local
+    if (/^fe[c-f][0-9a-f]:/.test(host)) return true; // fec0::/10 site local (deprecated)
+    // IPv4-mapped IPv6 appears as ::ffff:7f00:1 in WHATWG URLs.
+    const mapped = host.match(/^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/i);
+    if (mapped) {
+      const hi = parseInt(mapped[1], 16);
+      const lo = parseInt(mapped[2], 16);
+      return isPrivateHost(`${hi >> 8}.${hi & 255}.${lo >> 8}.${lo & 255}`);
+    }
+    return false;
+  }
 
   const v4 = host.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
   if (!v4) return false;
@@ -264,4 +356,9 @@ function isPrivateHost(hostname: string): boolean {
   if (a === 172 && b >= 16 && b <= 31) return true;
   if (a === 100 && b >= 64 && b <= 127) return true; // Tailscale / CGNAT
   return false;
+}
+
+function isIpLiteral(hostname: string): boolean {
+  const host = hostname.replace(/^\[|\]$/g, '');
+  return /^\d{1,3}(\.\d{1,3}){3}$/.test(host) || host.includes(':');
 }

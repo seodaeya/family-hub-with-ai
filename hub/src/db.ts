@@ -1,3 +1,4 @@
+import { chmodSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 import { randomBytes, createHash, randomUUID } from 'node:crypto';
 import { ensureDirs, dbPath } from './config.ts';
@@ -5,6 +6,16 @@ import { ensureDirs, dbPath } from './config.ts';
 ensureDirs();
 
 export const db = new DatabaseSync(dbPath());
+
+// Tighten an existing DB created before the umask change. WAL/SHM files are
+// created below with the private umask from config.ts.
+for (const suffix of ['', '-wal', '-shm']) {
+  try {
+    chmodSync(`${dbPath()}${suffix}`, 0o600);
+  } catch {
+    // File does not exist yet, or the filesystem has no POSIX modes.
+  }
+}
 
 db.exec(`
 PRAGMA journal_mode = WAL;
@@ -315,6 +326,34 @@ export function savePhotoMeta(input: { id: string; familyId: string; expiresAt: 
   );
 }
 
+/**
+ * Photo ids this family may see. Includes files referenced by an older sync
+ * source but missing a photo_meta row. Never expose the raw data/photos
+ * directory listing: the hub DB can hold more than one family.
+ */
+export function listPhotoIdsForFamily(familyId: string): string[] {
+  const rows = db
+    .prepare(
+      `SELECT id FROM photo_meta WHERE familyId = ?
+       UNION
+       SELECT photoRef AS id FROM sources WHERE familyId = ? AND photoRef IS NOT NULL`,
+    )
+    .all(familyId, familyId) as Array<{ id: string }>;
+  return rows.map((row) => row.id);
+}
+
+export function photoBelongsToFamily(id: string, familyId: string): boolean {
+  const row = db
+    .prepare(
+      `SELECT 1 AS ok FROM photo_meta WHERE id = ? AND familyId = ?
+       UNION
+       SELECT 1 AS ok FROM sources WHERE photoRef = ? AND familyId = ?
+       LIMIT 1`,
+    )
+    .get(id, familyId, id, familyId) as { ok: number } | undefined;
+  return Boolean(row);
+}
+
 /** Removes expired rows and returns their ids so the caller can unlink files. */
 export function purgeExpiredPhotos(familyId: string, nowMs = now()): string[] {
   const rows = db
@@ -409,9 +448,13 @@ export function applyOp(familyId: string, op: SyncOp): { applied: boolean; rev: 
   if (!FIELDS[entity]) throw new Error(`unknown entity: ${entity}`);
   if (!op.row?.id) throw new Error('row.id required');
 
-  const existing = db.prepare(`SELECT * FROM ${entity} WHERE id = ?`).get(op.row.id) as
-    | (Record<string, unknown> & { updatedAt: number; rev: number })
-    | undefined;
+  // Ids are global primary keys in this schema, so always scope the lookup to
+  // the caller's family. Without this, a device from family A could overwrite
+  // a row id that belongs to family B.
+  const existing = db.prepare(`SELECT * FROM ${entity} WHERE id = ? AND familyId = ?`).get(
+    op.row.id,
+    familyId,
+  ) as (Record<string, unknown> & { updatedAt: number; rev: number }) | undefined;
 
   if (existing) {
     if (entity === 'events' && Number(existing.isRepetition) === 1) {
@@ -429,7 +472,11 @@ export function applyOp(familyId: string, op: SyncOp): { applied: boolean; rev: 
       op.row.deleted ? 1 : 0,
       rev,
     ];
-    db.prepare(`UPDATE ${entity} SET ${assignments} WHERE id = ?`).run(...values, op.row.id);
+    db.prepare(`UPDATE ${entity} SET ${assignments} WHERE id = ? AND familyId = ?`).run(
+      ...values,
+      op.row.id,
+      familyId,
+    );
     return { applied: true, rev };
   }
 

@@ -243,14 +243,16 @@ node scripts/bench.ts /tmp/notice.png   # 모델 속도·품질 비교
 ## 집 밖에서 접속 (선택)
 
 1. 맥과 폰에 Tailscale 설치, 같은 계정으로 로그인
-2. 맥에서 HTTPS 활성화 후 프록시:
+2. 맥에서 HTTPS 프록시를 켭니다. 허브는 TLS를 직접 처리하지 않으므로 `tailscale serve`가 앞단에서 HTTPS를 종료합니다.
 
 ```bash
-tailscale serve --bg 4317
-tailscale ip -4          # 100.x.y.z 주소를 앱 서버 주소로 사용
+tailscale serve --bg 4317          # tailnet 안에서만 https://<맥이름>.<tailnet>.ts.net 으로 노출
+tailscale serve status             # 실제 HTTPS 주소 확인
 ```
 
-3. 앱 **설정 → 연결 → 서버 주소 변경** 에서 `http://100.x.y.z:4317` 로 변경 (또는 serve 주소)
+3. 앱 **설정 → 연결 → 서버 주소 변경** 에서 **`https://<맥이름>.<tailnet>.ts.net`** (포트 없음)을 입력합니다.
+
+> `tailscale ip -4`가 주는 `100.x.y.z` 주소를 `http://`로 쓰는 방법도 동작합니다. 이때 구간은 WireGuard로 암호화되지만 앱과 허브 사이는 HTTP이므로, 가능하면 위의 `serve` HTTPS 주소를 쓰세요. 어느 쪽이든 공유기에서 4317 포트를 인터넷에 열지 마세요.
 
 자세한 보안 설정은 [docs/SECURITY.md](docs/SECURITY.md) 참고.
 
