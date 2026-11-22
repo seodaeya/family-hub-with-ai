@@ -4,7 +4,19 @@ dist/
 web-build/
 *.log
 .DS_Store
+
+# local secrets / credentials (never commit)
 .env
+.env.*
+!.env.example
+*.pem
+*.p8
+*.p12
+*.key
+*.jks
+*.mobileprovision
+*service-account*.json
+*credentials*.json
 
 # local family data (never commit)
 hub/data/
